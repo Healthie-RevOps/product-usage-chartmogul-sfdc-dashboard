@@ -1,0 +1,120 @@
+"""Database layer. Railway provides DATABASE_URL automatically when you attach Postgres."""
+import os
+from contextlib import contextmanager
+
+from sqlalchemy import (
+    Column, String, Integer, BigInteger, DateTime, Text, ForeignKey, create_engine, func,
+)
+from sqlalchemy.orm import declarative_base, relationship, sessionmaker
+
+DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///local.db")
+# Railway's Postgres URL sometimes comes as postgres:// which SQLAlchemy 2.x rejects
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
+Base = declarative_base()
+
+
+class Customer(Base):
+    __tablename__ = "customers"
+
+    cm_uuid = Column(String, primary_key=True)          # ChartMogul customer UUID
+    name = Column(String)
+    email = Column(String)
+    status = Column(String)                              # Lead / Active / Past Due / Cancelled
+    customer_since = Column(DateTime)
+    mrr_cents = Column(BigInteger, default=0)            # total current MRR in cents
+    currency = Column(String, default="USD")
+    stripe_customer_id = Column(String, index=True)      # from ChartMogul external_ids
+    healthie_org_id = Column(String, index=True)         # from CM custom attributes, if set
+    cm_url = Column(String)
+
+    # SFDC join results
+    sfdc_account_id = Column(String, ForeignKey("sfdc_accounts.id"), nullable=True, index=True)
+    match_method = Column(String)                        # stripe_id | org_id | unmatched
+
+    synced_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+    subscriptions = relationship("Subscription", back_populates="customer",
+                                 cascade="all, delete-orphan")
+    sfdc_account = relationship("SfdcAccount", back_populates="customers")
+
+
+class Subscription(Base):
+    __tablename__ = "subscriptions"
+
+    cm_uuid = Column(String, primary_key=True)           # ChartMogul subscription UUID
+    customer_uuid = Column(String, ForeignKey("customers.cm_uuid"), index=True)
+    plan_name = Column(String, index=True)
+    external_id = Column(String)                         # Stripe subscription id
+    status = Column(String)                              # active / cancelled / etc.
+    quantity = Column(Integer)
+    mrr_cents = Column(BigInteger, default=0)
+    currency = Column(String, default="USD")
+    billing_cycle = Column(String)                       # month / year
+    start_date = Column(DateTime)
+    end_date = Column(DateTime)
+
+    customer = relationship("Customer", back_populates="subscriptions")
+
+
+class SfdcAccount(Base):
+    __tablename__ = "sfdc_accounts"
+
+    id = Column(String, primary_key=True)                # 18-char SFDC Id
+    name = Column(String)
+    healthie_org_id = Column(String, index=True)
+    stripe_customer_id = Column(String, index=True)
+    owner_name = Column(String)
+    account_type = Column(String)
+
+    customers = relationship("Customer", back_populates="sfdc_account")
+    contacts = relationship("SfdcContact", back_populates="account",
+                            cascade="all, delete-orphan")
+
+
+class SfdcContact(Base):
+    __tablename__ = "sfdc_contacts"
+
+    id = Column(String, primary_key=True)
+    account_id = Column(String, ForeignKey("sfdc_accounts.id"), index=True)
+    name = Column(String)
+    email = Column(String)
+    title = Column(String)
+
+    account = relationship("SfdcAccount", back_populates="contacts")
+
+
+class SyncRun(Base):
+    __tablename__ = "sync_runs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    started_at = Column(DateTime, server_default=func.now())
+    finished_at = Column(DateTime)
+    status = Column(String, default="running")           # running / success / failed
+    customers_synced = Column(Integer, default=0)
+    subscriptions_synced = Column(Integer, default=0)
+    accounts_synced = Column(Integer, default=0)
+    contacts_synced = Column(Integer, default=0)
+    matched = Column(Integer, default=0)
+    unmatched = Column(Integer, default=0)
+    error = Column(Text)
+
+
+def init_db():
+    Base.metadata.create_all(engine)
+
+
+@contextmanager
+def session_scope():
+    session = SessionLocal()
+    try:
+        yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()

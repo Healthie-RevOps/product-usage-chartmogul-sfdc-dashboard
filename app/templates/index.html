@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+{% block title %}Customers{% endblock %}
+
+{% block run %}
+{% if last_run %}
+<span class="run">Last sync {{ last_run.started_at.strftime("%b %d %H:%M UTC") }} · {{ last_run.status }}</span>
+{% endif %}
+{% endblock %}
+
+{% block content %}
+<div class="figures">
+  <div><b>{{ "{:,}".format(totals.customers) }}</b><span>active customers</span></div>
+  <div><b>{{ totals.mrr|money }}</b><span>active MRR</span></div>
+  <div><b>{{ "{:,}".format(totals.matched) }}</b><span>matched to SFDC</span></div>
+  <div class="warn"><b>{{ "{:,}".format(totals.unmatched) }}</b>
+    <span><a href="/?match=unmatched&status=">unmatched — review</a></span></div>
+</div>
+
+<form class="filters" method="get" action="/">
+  <input type="search" name="q" value="{{ q }}" placeholder="Search name, email, or org ID">
+  <select name="plan">
+    <option value="">All products</option>
+    {% for p in plans %}<option value="{{ p }}" {% if p == plan %}selected{% endif %}>{{ p }}</option>{% endfor %}
+  </select>
+  <select name="status">
+    <option value="">Any status</option>
+    {% for s in statuses %}<option value="{{ s }}" {% if s == status %}selected{% endif %}>{{ s }}</option>{% endfor %}
+  </select>
+  <select name="match">
+    <option value="">Matched + unmatched</option>
+    <option value="matched" {% if match == "matched" %}selected{% endif %}>Matched only</option>
+    <option value="unmatched" {% if match == "unmatched" %}selected{% endif %}>Unmatched only</option>
+  </select>
+  <button type="submit">Filter</button>
+</form>
+
+{% if customers %}
+<table>
+  <thead><tr>
+    <th>Customer</th><th>Products</th><th class="num">MRR</th>
+    <th>SFDC account</th><th>Owner</th><th>Status</th>
+  </tr></thead>
+  <tbody>
+  {% for c in customers %}
+    <tr>
+      <td><a href="/customer/{{ c.cm_uuid }}">{{ c.name or c.email }}</a>
+        {% if c.healthie_org_id %}<div class="status">Org {{ c.healthie_org_id }}</div>{% endif %}</td>
+      <td>
+        {% for s in c.subscriptions %}
+          <span class="chip">{{ s.plan_name }}</span>{% if s.quantity and s.quantity > 1 %}<span class="chip qty">×{{ s.quantity }}</span>{% endif %}
+        {% else %}<span class="status">no active subscriptions</span>{% endfor %}
+      </td>
+      <td class="num">{{ c.mrr_cents|money(c.currency) }}</td>
+      <td>
+        {% if c.sfdc_account %}
+          <a href="{{ lightning_base }}/lightning/r/Account/{{ c.sfdc_account.id }}/view" target="_blank" rel="noopener">{{ c.sfdc_account.name }}</a>
+        {% else %}<span class="flag">unmatched</span>{% endif %}
+      </td>
+      <td>{{ c.sfdc_account.owner_name if c.sfdc_account else "—" }}</td>
+      <td class="status">{{ c.status }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="empty">No customers match these filters. Run the sync (<code>python -m sync.run_sync</code>) if this is a fresh deploy.</div>
+{% endif %}
+{% endblock %}

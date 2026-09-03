@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}{{ c.name if c else "Not found" }}{% endblock %}
+
+{% block content %}
+<p class="back" style="margin-top:14px"><a href="/">← All customers</a></p>
+
+{% if not c %}
+<div class="empty">Customer not found.</div>
+{% else %}
+<div class="figures">
+  <div><b>{{ c.name or c.email }}</b><span>{{ c.email }} · {{ c.status }}</span></div>
+  <div><b>{{ c.mrr_cents|money(c.currency) }}</b><span>current MRR</span></div>
+  <div><b>{{ c.customer_since.strftime("%b %Y") if c.customer_since else "—" }}</b><span>customer since</span></div>
+  {% if not c.sfdc_account %}<div class="warn"><b>unmatched</b><span>no SFDC account joined</span></div>{% endif %}
+</div>
+
+<h2>Products</h2>
+{% if c.subscriptions %}
+<table>
+  <thead><tr><th>Plan</th><th class="num">Quantity</th><th class="num">MRR</th>
+    <th>Cycle</th><th>Status</th><th>Started</th></tr></thead>
+  <tbody>
+  {% for s in c.subscriptions %}
+    <tr>
+      <td>{{ s.plan_name }}</td>
+      <td class="num">{{ s.quantity or "—" }}</td>
+      <td class="num">{{ s.mrr_cents|money(s.currency) }}</td>
+      <td>{{ s.billing_cycle or "—" }}</td>
+      <td class="status">{{ s.status }}</td>
+      <td class="status">{{ s.start_date.strftime("%Y-%m-%d") if s.start_date else "—" }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}<div class="empty">No subscriptions on record.</div>{% endif %}
+
+<h2>Salesforce</h2>
+{% if c.sfdc_account %}
+<p>
+  <a href="{{ lightning_base }}/lightning/r/Account/{{ c.sfdc_account.id }}/view" target="_blank" rel="noopener">
+    {{ c.sfdc_account.name }}</a>
+  · Owner: {{ c.sfdc_account.owner_name or "—" }}
+  · Matched via <span class="chip">{{ c.match_method }}</span>
+  {% if c.cm_url %} · <a href="{{ c.cm_url }}" target="_blank" rel="noopener">Open in ChartMogul</a>{% endif %}
+</p>
+{% if c.sfdc_account.contacts %}
+<table style="margin-top:10px">
+  <thead><tr><th>Contact</th><th>Title</th><th>Email</th></tr></thead>
+  <tbody>
+  {% for ct in c.sfdc_account.contacts %}
+    <tr>
+      <td><a href="{{ lightning_base }}/lightning/r/Contact/{{ ct.id }}/view" target="_blank" rel="noopener">{{ ct.name }}</a></td>
+      <td>{{ ct.title or "—" }}</td>
+      <td>{{ ct.email or "—" }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}<p class="status">No contacts on this account.</p>{% endif %}
+{% else %}
+<div class="empty">Unmatched — no Stripe Customer ID or Healthie Org ID on any SFDC account lined up
+with this ChartMogul customer. Fix the ID on the Account and it will join on the next nightly sync.</div>
+{% endif %}
+{% endif %}
+{% endblock %}
