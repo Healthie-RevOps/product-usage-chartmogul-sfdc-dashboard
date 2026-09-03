@@ -1,9 +1,12 @@
 """Dashboard web service. Start command:  uvicorn app.main:app --host 0.0.0.0 --port $PORT"""
+import base64
+import binascii
 import os
+import secrets
 from collections import defaultdict
 
 from fastapi import FastAPI, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import desc, func, or_
 from sqlalchemy.orm import joinedload
@@ -15,6 +18,40 @@ templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "t
 
 SFDC_DOMAIN = os.environ.get("SFDC_DOMAIN", "https://healthie.my.salesforce.com")
 LIGHTNING_BASE = SFDC_DOMAIN.replace(".my.salesforce.com", ".lightning.force.com")
+
+
+DASH_USER = os.environ.get("DASH_USER", "")
+DASH_PASS = os.environ.get("DASH_PASS", "")
+PUBLIC_PATHS = {"/health"}
+
+
+@app.middleware("http")
+async def basic_auth(request: Request, call_next):
+    """HTTP Basic auth over everything but /health. No creds configured = open (local dev)."""
+    if not (DASH_USER and DASH_PASS) or request.url.path in PUBLIC_PATHS:
+        return await call_next(request)
+
+    unauthorized = Response(
+        status_code=401,
+        content="Unauthorized",
+        headers={"WWW-Authenticate": 'Basic realm="dashboard"'},
+    )
+
+    header = request.headers.get("authorization", "")
+    scheme, _, encoded = header.partition(" ")
+    if scheme.lower() != "basic":
+        return unauthorized
+    try:
+        user, _, password = base64.b64decode(encoded).decode("utf-8").partition(":")
+    except (binascii.Error, UnicodeDecodeError, ValueError):
+        return unauthorized
+
+    ok_user = secrets.compare_digest(user, DASH_USER)
+    ok_pass = secrets.compare_digest(password, DASH_PASS)
+    if not (ok_user and ok_pass):
+        return unauthorized
+
+    return await call_next(request)
 
 
 @app.on_event("startup")
