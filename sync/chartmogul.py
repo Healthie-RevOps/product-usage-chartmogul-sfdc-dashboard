@@ -31,17 +31,21 @@ class ChartMogulError(RuntimeError):
     pass
 
 
-def _get(path: str, params: dict | None = None) -> dict:
+class ChartMogulTransientError(ChartMogulError):
+    """Retries exhausted on 429/5xx/timeouts (as opposed to a 4xx we shouldn't retry)."""
+
+
+def _get(path: str, params: dict | None = None, attempts: int = MAX_ATTEMPTS) -> dict:
     """GET with backoff on 429, 5xx and network errors. One flaky request should not
     throw away an hour-long sync."""
     if not API_KEY:
         raise ChartMogulError("CHARTMOGUL_API_KEY is not set")
     last = None
-    for attempt in range(MAX_ATTEMPTS):
+    for attempt in range(attempts):
         wait = min(2 ** attempt, 60)
         try:
             resp = _http.get(f"{BASE}{path}", params=params or {},
-                             auth=(API_KEY, ""), timeout=60)
+                             auth=(API_KEY, ""), timeout=75)  # CM itself gives up at ~60s
         except (requests.ConnectionError, requests.Timeout) as exc:
             last = f"network error: {exc}"
             log.warning("ChartMogul %s on %s, retrying in %ss", type(exc).__name__, path, wait)
@@ -56,20 +60,39 @@ def _get(path: str, params: dict | None = None) -> dict:
             raise ChartMogulError(f"{resp.status_code} on {path}: {resp.text[:300]}")
         time.sleep(REQUEST_DELAY_S)
         return resp.json()
-    raise ChartMogulError(f"Gave up on {path} after {MAX_ATTEMPTS} attempts ({last})")
+    raise ChartMogulTransientError(f"Gave up on {path} after {attempts} attempts ({last})")
 
 
-def _paginate(path: str, list_key: str, params: dict | None = None):
-    """Yield entries across cursor-paginated responses."""
+def _paginate(path: str, list_key: str, params: dict | None = None, per_page: int = 100):
+    """Yield entries across cursor-paginated responses, with adaptive page size.
+
+    ChartMogul builds list pages synchronously and returns 500 when a page takes >60s.
+    Recently created customers are slow (observed 2026-11-02: 40 customers created after
+    2026-10-21 took 11s; a 100-row page from 2026-10-14 always 500'd). So on repeated
+    failure we retry the *same cursor* with a quarter of the page size, down to 1, then
+    grow back after successes.
+    """
     params = dict(params or {})
-    params.setdefault("per_page", 100)  # 200 times out more often under load
+    size, streak = per_page, 0
     while True:
-        data = _get(path, params)
+        params["per_page"] = size
+        try:
+            data = _get(path, params, attempts=2 if size > 1 else MAX_ATTEMPTS)
+        except ChartMogulTransientError:
+            if size == 1:
+                raise
+            size, streak = max(1, size // 4), 0
+            log.warning("ChartMogul %s page keeps failing; retrying with per_page=%d",
+                        path, size)
+            continue
         for entry in data.get(list_key) or data.get("entries") or []:
             yield entry
         if not data.get("has_more") or not data.get("cursor"):
             break
         params["cursor"] = data["cursor"]
+        streak += 1
+        if size < per_page and streak >= 5:  # each failed probe costs ~2 min; grow slowly
+            size, streak = min(per_page, size * 2), 0
 
 
 def iter_customers(statuses: list[str]):
