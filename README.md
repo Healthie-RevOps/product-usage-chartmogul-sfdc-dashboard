@@ -8,7 +8,8 @@ they're contracted for, and who the active users are (with contact info).**
 ## Status (2026-11-02)
 
 Railway project `product-usage-dashboard` (Healthie RevOps workspace) exists with Postgres,
-`web` and `sync` services. `web` is deployed behind Basic auth. **`sync` is not deployed**
+`web` and `sync` services. `web` is live at https://web-production-fac10.up.railway.app
+(Basic auth). **`sync` is not deployed**
 because it is waiting on SFDC + ChartMogul credentials, so the dashboard is empty until then.
 
 | # | Requirement | Status | Source |
@@ -66,7 +67,8 @@ Design decisions (deliberate — don't undo casually):
 1. Push this repo to GitHub, create a Railway project from it.
 2. Add a **Postgres** database to the project (`DATABASE_URL` is injected automatically).
 3. Create **two services from the same repo**, named exactly `web` and `sync`.
-   Both use `railway.json` → `python start.py`, which picks its role from
+   Both start with `python start.py` (from `Procfile` + the `RAILPACK_START_CMD` service
+   variable; Railway ignored `railway.json` on CLI uploads). `start.py` picks its role from
    `RAILWAY_SERVICE_NAME` (override with `SERVICE_ROLE`):
    - `web` serves the dashboard. Generate a public domain for it.
    - `sync` runs once and exits. In the dashboard, set Service → Settings → Cron Schedule
