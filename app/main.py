@@ -6,55 +6,120 @@ import io
 import os
 import secrets
 
-from fastapi import FastAPI, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse, Response
+from urllib.parse import quote
+
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel
 from sqlalchemy import case, desc, func, or_
 from sqlalchemy.orm import joinedload, selectinload
+from starlette.middleware.sessions import SessionMiddleware
 
+from app import auth
 from app.db import (
     Customer, SfdcAccount, SfdcContact, Subscription, SyncRun, init_db, SessionLocal,
 )
 
-app = FastAPI(title="Healthie ChartMogul x SFDC")
+app = FastAPI(title="Healthie ChartMogul x SFDC", docs_url=None, redoc_url=None,
+              openapi_url=None)
 templates = Jinja2Templates(directory=os.path.join(os.path.dirname(__file__), "templates"))
 
 SFDC_DOMAIN = os.environ.get("SFDC_DOMAIN", "https://healthie.my.salesforce.com")
 LIGHTNING_BASE = SFDC_DOMAIN.replace(".my.salesforce.com", ".lightning.force.com")
 
-
+# Machine access to /api/* only (scripts, Claude skills): HTTP Basic with these creds.
+# People use Google sign-in; Basic auth is never accepted for the HTML pages or CSVs.
 DASH_USER = os.environ.get("DASH_USER", "")
 DASH_PASS = os.environ.get("DASH_PASS", "")
-PUBLIC_PATHS = {"/health"}
+PUBLIC_PATHS = {"/health", "/login", "/auth/google", "/logout"}
 
 
-@app.middleware("http")
-async def basic_auth(request: Request, call_next):
-    """HTTP Basic auth over everything but /health. No creds configured = open (local dev)."""
-    if not (DASH_USER and DASH_PASS) or request.url.path in PUBLIC_PATHS:
-        return await call_next(request)
-
-    unauthorized = Response(
-        status_code=401,
-        content="Unauthorized",
-        headers={"WWW-Authenticate": 'Basic realm="dashboard"'},
-    )
-
-    header = request.headers.get("authorization", "")
-    scheme, _, encoded = header.partition(" ")
+def _basic_ok(request: Request) -> bool:
+    if not (DASH_USER and DASH_PASS):
+        return False
+    scheme, _, encoded = request.headers.get("authorization", "").partition(" ")
     if scheme.lower() != "basic":
-        return unauthorized
+        return False
     try:
         user, _, password = base64.b64decode(encoded).decode("utf-8").partition(":")
     except (binascii.Error, UnicodeDecodeError, ValueError):
-        return unauthorized
+        return False
+    return secrets.compare_digest(user, DASH_USER) & secrets.compare_digest(password, DASH_PASS)
 
-    ok_user = secrets.compare_digest(user, DASH_USER)
-    ok_pass = secrets.compare_digest(password, DASH_PASS)
-    if not (ok_user and ok_pass):
-        return unauthorized
 
-    return await call_next(request)
+@app.middleware("http")
+async def require_sign_in(request: Request, call_next):
+    """@gethealthie.com Google sign-in over everything except PUBLIC_PATHS.
+    Fails closed: no SESSION_SECRET (and no ALLOW_INSECURE_NO_AUTH=1) -> 503."""
+    path = request.url.path
+    if path in PUBLIC_PATHS:
+        return await call_next(request)
+    if not auth.configured():
+        return Response("Sign-in is not configured (SESSION_SECRET is missing).",
+                        status_code=503)
+    if auth.current_user(request):
+        return await call_next(request)
+    if path.startswith("/api/"):
+        if _basic_ok(request):
+            return await call_next(request)
+        return JSONResponse({"detail": "Sign in required."}, status_code=401)
+    if request.method == "GET" and not path.endswith(".csv"):
+        target = path + (f"?{request.url.query}" if request.url.query else "")
+        return RedirectResponse(f"/login?next={quote(target, safe='')}", status_code=303)
+    return Response("Sign in required.", status_code=401)
+
+
+# Added after the gate so it wraps it (outermost): request.session exists in the gate.
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=os.environ.get("SESSION_SECRET") or "insecure-local-only",
+    session_cookie="pud_session",
+    max_age=14 * 24 * 3600,
+    same_site="lax",
+    https_only=bool(os.environ.get("RAILWAY_PUBLIC_DOMAIN")),
+)
+
+
+def _safe_next(target: str | None) -> str:
+    """Only same-site relative paths: blocks open redirects like //evil.com."""
+    if target and target.startswith("/") and not target.startswith("//") and "\\" not in target:
+        return target
+    return "/products"
+
+
+@app.get("/login", response_class=HTMLResponse)
+def login(request: Request, next: str = Query("")):
+    if auth.configured() and auth.current_user(request):
+        return RedirectResponse(_safe_next(next), status_code=303)
+    return templates.TemplateResponse(request, "login.html", {
+        "unconfigured": not auth.configured(), "client_id": auth.client_id(),
+        "domain": auth.allowed_domain(), "next": _safe_next(next),
+    }, status_code=200 if auth.configured() else 503)
+
+
+class Credential(BaseModel):
+    credential: str
+
+
+@app.post("/auth/google")
+def auth_google(body: Credential, request: Request):
+    if not auth.configured():
+        raise HTTPException(503, "Sign-in is not configured.")
+    if request.headers.get("x-requested-with") != "fetch":
+        raise HTTPException(403, "Missing request header.")
+    try:
+        user = auth.verify_google_credential(body.credential)
+    except ValueError as exc:
+        raise HTTPException(403, str(exc))
+    request.session["user"] = user
+    return {"ok": True}
+
+
+@app.post("/logout")
+def logout(request: Request):
+    request.session.clear()
+    return RedirectResponse("/login", status_code=303)
 
 
 @app.on_event("startup")

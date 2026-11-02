@@ -13,7 +13,7 @@ os.environ["DATABASE_URL"] = "sqlite:///" + os.path.join(
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from app import main  # noqa: E402
+from app import auth, main  # noqa: E402
 from app.db import (  # noqa: E402
     Customer, SfdcAccount, SfdcContact, SfdcContract, Subscription, SyncRun, init_db,
     session_scope,
@@ -86,7 +86,9 @@ def check(label, got, want):
 
 client = TestClient(main.app)
 
-print("auth disabled (DASH_USER/DASH_PASS unset):")
+print("auth bypassed (ALLOW_INSECURE_NO_AUTH=1, local dev):")
+os.environ.pop("SESSION_SECRET", None)
+os.environ["ALLOW_INSECURE_NO_AUTH"] = "1"
 main.DASH_USER = main.DASH_PASS = ""
 for route in ROUTES:
     check(route, client.get(route).status_code, 200)
@@ -119,21 +121,71 @@ fcsv = client.get("/product/users.csv?product=Group+Plan&view=former").text
 check("former CSV has former user", "admin@gone.test" in fcsv and ",former," in fcsv, True)
 check("unmatched list shows any status", "Gone Clinic" in client.get("/?status=").text, True)
 
-print("\nauth enabled:")
+print("\nfails closed (no SESSION_SECRET, no insecure override):")
+os.environ.pop("ALLOW_INSECURE_NO_AUTH")
+check("/products -> 503", client.get("/products").status_code, 503)
+check("/login -> 503 page", client.get("/login").status_code, 503)
+check("/health still public", client.get("/health").status_code, 200)
+
+print("\nGoogle sign-in enabled:")
+os.environ["SESSION_SECRET"] = "test-secret"
 main.DASH_USER, main.DASH_PASS = "dashuser", "dashpass"
-good = {"Authorization": "Basic " + base64.b64encode(b"dashuser:dashpass").decode()}
+basic = {"Authorization": "Basic " + base64.b64encode(b"dashuser:dashpass").decode()}
 bad = {"Authorization": "Basic " + base64.b64encode(b"dashuser:wrong").decode()}
+anon = TestClient(main.app)
 
 for route in ROUTES:
-    want = 200 if route == "/health" else 401
-    check(f"no creds {route}", client.get(route).status_code, want)
+    r = anon.get(route, follow_redirects=False)
+    if route == "/health":
+        want = 200
+    elif route.startswith("/api/") or ".csv" in route:
+        want = 401
+    else:
+        want = 303
+    check(f"signed out {route}", r.status_code, want)
+r = anon.get("/product?product=Group+Plan&view=former", follow_redirects=False)
+check("redirect keeps destination", r.headers.get("location"),
+      "/login?next=%2Fproduct%3Fproduct%3DGroup%2BPlan%26view%3Dformer")
+check("login page renders Google button",
+      'data-client_id="' + auth.client_id() in anon.get("/login").text, True)
+check("Basic auth works for /api/*", anon.get("/api/products", headers=basic).status_code, 200)
+check("Basic auth NOT accepted for pages",
+      anon.get("/products", headers=basic, follow_redirects=False).status_code, 303)
+check("Basic auth NOT accepted for CSV",
+      anon.get("/product/users.csv?product=Group+Plan", headers=basic).status_code, 401)
+check("wrong Basic password", anon.get("/api/products", headers=bad).status_code, 401)
+
+# Google token verification is network-bound; stub it and test the session flow.
+real_verify = auth.verify_google_credential
+auth.verify_google_credential = lambda cred: (
+    {"email": "pm@gethealthie.com", "name": "PM"} if cred == "good"
+    else (_ for _ in ()).throw(ValueError("Use your @gethealthie.com Google account.")))
+user = TestClient(main.app)
+fetch = {"X-Requested-With": "fetch"}
+check("POST /auth/google without fetch header -> 403",
+      user.post("/auth/google", json={"credential": "good"}).status_code, 403)
+check("wrong-domain account -> 403",
+      user.post("/auth/google", json={"credential": "bad"}, headers=fetch).status_code, 403)
+check("good account -> 200",
+      user.post("/auth/google", json={"credential": "good"}, headers=fetch).status_code, 200)
 for route in ROUTES:
-    check(f"good creds {route}", client.get(route, headers=good).status_code, 200)
-check("wrong password", client.get("/", headers=bad).status_code, 401)
-check("malformed base64", client.get("/", headers={"Authorization": "Basic !!!"}).status_code, 401)
-check("wrong scheme", client.get("/", headers={"Authorization": "Bearer tok"}).status_code, 401)
-check("WWW-Authenticate header",
-      client.get("/").headers.get("www-authenticate"), 'Basic realm="dashboard"')
+    check(f"signed in {route}", user.get(route).status_code, 200)
+check("header shows signed-in email", "pm@gethealthie.com" in user.get("/products").text, True)
+check("login redirects signed-in user to next",
+      user.get("/login?next=/products", follow_redirects=False).headers.get("location"),
+      "/products")
+check("open redirect blocked", user.get("/login?next=//evil.com",
+                                        follow_redirects=False).headers.get("location"),
+      "/products")
+user.post("/logout")
+check("after logout -> redirect to login",
+      user.get("/products", follow_redirects=False).status_code, 303)
+auth.verify_google_credential = real_verify
+
+print("\ndomain check (real function):")
+check("gethealthie.com allowed", auth.email_allowed("a@gethealthie.com"), True)
+check("lookalike domain refused", auth.email_allowed("a@gethealthie.com.evil.com"), False)
+check("gmail refused", auth.email_allowed("a@gmail.com"), False)
 
 print(f"\n{'ALL CHECKS PASSED' if not failures else 'FAILURES: ' + ', '.join(failures)}")
 raise SystemExit(1 if failures else 0)

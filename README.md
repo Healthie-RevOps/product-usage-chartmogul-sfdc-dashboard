@@ -8,18 +8,18 @@ they're contracted for, and who the active users are (with contact info).**
 ## Status (2026-11-02)
 
 Railway project `product-usage-dashboard` (Healthie RevOps workspace) exists with Postgres,
-`web` and `sync` services. `web` is live at https://web-production-fac10.up.railway.app
-(Basic auth). `sync` is
-deployed with ChartMogul + SFDC credentials.
+`web` and `sync` services. `web` is live at https://product-usage.up.railway.app behind
+Google sign-in (@gethealthie.com). `sync` runs nightly at 09:00 UTC with ChartMogul +
+SFDC credentials.
 
 | # | Requirement | Status | Source |
 |---|---|---|---|
 | 1 | Products + product usage | Products ✅ / usage ⚠️ partial | ChartMogul plans; SFDC Account usage fields |
-| 2 | Which products each customer uses | ✅ `/products` → `/product?plan=…`, `/customer/…` | ChartMogul subscriptions |
+| 2 | Which products each customer uses | ✅ `/products` → `/product?product=…`, `/customer/…` | ChartMogul subscriptions |
 | 3 | Revenue | ✅ MRR + ARR per product and per customer | ChartMogul |
 | 4 | Key usage metrics | ⚠️ active users, active clients, providers, health score; no feature-level usage | SFDC Account (Vitally-fed) |
 | 5 | Contacts/users actively using the product | ✅ at the account level (`Healthie_User_Active__c`) | SFDC Contact |
-| 6 | Names, emails, phone for those users | ✅ on page + CSV export (`/product/users.csv?plan=…`) | SFDC Contact |
+| 6 | Names, emails, phone for those users | ✅ on page + CSV export (`/product/users.csv?product=…`) | SFDC Contact |
 | 7 | Contract values | ✅ latest closed-won TCV / Year-1 ACV, contract start/end | SFDC Opportunity |
 
 ### Open items
@@ -31,8 +31,8 @@ deployed with ChartMogul + SFDC credentials.
    `SECURITY_TOKEN` vars. That user can't see `Product_Adoption_Score__c`. The sync skips
    hidden optional fields with a warning.
 2. ~~ChartMogul API key~~: done. The read-only key from `healthie-bottoms-up-model` is set on `sync` (verified 2026-11-02).
-3. Set the `sync` cron schedule in the Railway UI (`0 9 * * *`). The CLI can't set it.
-4. `DASH_USER`/`DASH_PASS` are set on `web`. View them with `railway variables -s web`.
+3. ~~Set the `sync` cron schedule~~: done in the Railway UI (`0 9 * * *`).
+4. `DASH_USER`/`DASH_PASS` on `web` now only gate `/api/*` (machine access).
 5. **The GitHub repo is public.** No secrets are committed, but consider making it private.
 
 ### Data quality, checked in prod 2026-11-02
@@ -107,13 +107,20 @@ Design decisions (deliberate — don't undo casually):
 
 ## Auth for the dashboard
 
-Railway exposes a public URL with no auth. Options, in order of effort:
-1. Keep the URL unguessable + no indexing (fine for a pilot, not for PHI-adjacent data —
-   note this is billing/product data only, no patient data flows here).
-2. Add HTTP Basic auth middleware in `app/main.py` (10 lines, `DASH_USER`/`DASH_PASS` env vars).
-3. Put it behind Google OAuth restricted to @gethealthie.com (fastapi + authlib).
-
-Recommendation: do (2) before sharing the link beyond RevOps.
+**Google sign-in, @gethealthie.com only.** This is the same `app/auth.py` used by
+healthie-events-calendar and medallion-credentialing:
+- The browser signs in with Google Identity Services. The server verifies the ID token
+  (signature, audience, verified email, `hd` = gethealthie.com) and keeps the user in a
+  signed session cookie (`SESSION_SECRET`, 14 days).
+- It uses the shared Healthie internal-apps OAuth client. The client ID is public, and
+  there is no client secret.
+- It **fails closed**: without `SESSION_SECRET` every page returns 503.
+  `ALLOW_INSECURE_NO_AUTH=1` bypasses sign-in for local dev only.
+- **The deployed origin must be listed under Authorized JavaScript origins** on that OAuth
+  client in Google Cloud Console (`https://product-usage.up.railway.app`). If the Railway
+  domain changes, add the new one too.
+- `/api/*` also accepts HTTP Basic (`DASH_USER`/`DASH_PASS`) so scripts and Claude skills
+  can call the JSON API. Pages and CSV exports require Google sign-in.
 
 ## Local dev
 
@@ -121,7 +128,7 @@ Recommendation: do (2) before sharing the link beyond RevOps.
 pip install -r requirements.txt
 cp .env.example .env   # fill in keys
 python -m sync.run_sync          # populates local.db (SQLite fallback)
-uvicorn app.main:app --reload
+ALLOW_INSECURE_NO_AUTH=1 uvicorn app.main:app --reload   # skip Google sign-in locally
 ```
 
 ## Pages

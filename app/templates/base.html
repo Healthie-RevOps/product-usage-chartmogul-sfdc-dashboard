@@ -26,6 +26,11 @@ header.site{display:flex;align-items:baseline;gap:14px;border-bottom:2px solid v
 header.site h1{font-size:19px;font-weight:600;letter-spacing:-.01em}
 header.site .sub{color:var(--muted);font-size:13px}
 header.site .run{margin-left:auto;color:var(--muted);font-size:12.5px}
+header.site .who{margin-left:auto;color:var(--muted);font-size:12.5px;white-space:nowrap}
+header.site .run + .who{margin-left:14px}
+header.site .who button{font:inherit;color:var(--green);background:none;border:0;padding:0;
+  cursor:pointer}
+header.site .who button:hover{text-decoration:underline}
 .figures{display:flex;border-bottom:1px solid var(--line)}
 .figures div{padding:16px 28px 16px 0;margin-right:28px;border-right:1px solid var(--line)}
 .figures div:last-child{border-right:0}
@@ -74,6 +79,12 @@ h2{font-size:16px;font-weight:600;margin:26px 0 10px}
   <nav class="sub"><a href="/products">Products</a> · <a href="/">Customers</a></nav>
   <span class="sub">ChartMogul joined to Salesforce, refreshed nightly</span>
   {% block run %}{% endblock %}
+  {% set signed_in = request.session.get("user") %}
+  {% if signed_in %}
+  <form method="post" action="/logout" class="who">
+    <span>{{ signed_in.email }}</span> <button type="submit">Sign out</button>
+  </form>
+  {% endif %}
 </header>
 {% block content %}{% endblock %}
 </div>
