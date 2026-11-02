@@ -74,15 +74,34 @@ def _query_all(soql: str):
         resp = requests.get(f"{SFDC_DOMAIN}{next_url}", headers=headers, timeout=60)
 
 
+# Account usage fields (verified 2026-11-02 via describe). Mostly Vitally-fed.
+ACCOUNT_USAGE_FIELDS = {
+    "active_standard_users": "Active_Standard_Users_Account__c",
+    "active_clients": "Healthie_Active_Clients_Account__c",
+    "num_providers": "Number_Of_Providers__c",
+    "adoption_score": "Product_Adoption_Score__c",
+    "health_score": "Customer_Health_Score__c",
+    "sfdc_arr": "ARR__c",
+}
+
+CHUNK = 300  # ids per IN (...) clause; keeps SOQL well under the 100k-char limit
+
+
+def _chunks(ids: list[str]):
+    for i in range(0, len(ids), CHUNK):
+        yield ",".join(f"'{a}'" for a in ids[i:i + CHUNK])
+
+
 def fetch_accounts():
     """Accounts that can possibly join to ChartMogul (have a Stripe ID or Org ID)."""
+    usage_cols = ", ".join(ACCOUNT_USAGE_FIELDS.values())
     soql = (
         f"SELECT Id, Name, {ACCOUNT_ORG_ID_FIELD}, {ACCOUNT_STRIPE_ID_FIELD}, "
-        f"Owner.Name, Type FROM Account "
+        f"Owner.Name, Type, {usage_cols} FROM Account "
         f"WHERE {ACCOUNT_ORG_ID_FIELD} != null OR {ACCOUNT_STRIPE_ID_FIELD} != null"
     )
     for rec in _query_all(soql):
-        yield {
+        row = {
             "id": rec["Id"],
             "name": rec.get("Name"),
             "healthie_org_id": _as_str(rec.get(ACCOUNT_ORG_ID_FIELD)),
@@ -90,17 +109,20 @@ def fetch_accounts():
             "owner_name": (rec.get("Owner") or {}).get("Name"),
             "account_type": rec.get("Type"),
         }
+        for col, field in ACCOUNT_USAGE_FIELDS.items():
+            row[col] = rec.get(field)
+        yield row
 
 
 def fetch_contacts(account_ids: list[str]):
-    """Contacts for the matched accounts, chunked to stay under SOQL limits."""
-    CHUNK = 400
-    for i in range(0, len(account_ids), CHUNK):
-        chunk = account_ids[i:i + CHUNK]
-        ids = ",".join(f"'{a}'" for a in chunk)
+    """Contacts (incl. Healthie user activity flags) for the given accounts.
+    Call this with *matched* accounts only — the org has 500k+ contacts."""
+    for ids in _chunks(account_ids):
         soql = (
-            "SELECT Id, AccountId, Name, Email, Title FROM Contact "
-            f"WHERE AccountId IN ({ids})"
+            "SELECT Id, AccountId, Name, Email, Title, Phone, MobilePhone, "
+            "Healthie_User_ID__c, Healthie_User_Active__c, Healthie_User_Type__c, "
+            "Healthie_User_Last_Active__c, Healthie_Org_Admin__c, Healthie_Org_Owner__c "
+            f"FROM Contact WHERE AccountId IN ({ids})"
         )
         for rec in _query_all(soql):
             yield {
@@ -109,6 +131,39 @@ def fetch_contacts(account_ids: list[str]):
                 "name": rec.get("Name"),
                 "email": rec.get("Email"),
                 "title": rec.get("Title"),
+                "phone": rec.get("Phone"),
+                "mobile_phone": rec.get("MobilePhone"),
+                "healthie_user_id": rec.get("Healthie_User_ID__c"),
+                "user_active": bool(rec.get("Healthie_User_Active__c")),
+                "user_type": rec.get("Healthie_User_Type__c"),
+                "last_active": rec.get("Healthie_User_Last_Active__c"),
+                "is_org_admin": bool(rec.get("Healthie_Org_Admin__c")),
+                "is_org_owner": bool(rec.get("Healthie_Org_Owner__c")),
+            }
+
+
+def fetch_contracts(account_ids: list[str]):
+    """Closed-won Opportunities with contract terms for the given accounts."""
+    for ids in _chunks(account_ids):
+        soql = (
+            "SELECT Id, AccountId, Name, Type, CloseDate, Amount, Total_Contract_Value__c, "
+            "Year_1_ACV__c, Contract_Start_Date__c, Contract_End_Date__c, "
+            "Contract_Term_months__c FROM Opportunity "
+            f"WHERE IsWon = true AND AccountId IN ({ids})"
+        )
+        for rec in _query_all(soql):
+            yield {
+                "id": rec["Id"],
+                "account_id": rec.get("AccountId"),
+                "name": rec.get("Name"),
+                "opp_type": rec.get("Type"),
+                "close_date": rec.get("CloseDate"),
+                "amount": rec.get("Amount"),
+                "total_contract_value": rec.get("Total_Contract_Value__c"),
+                "year1_acv": rec.get("Year_1_ACV__c"),
+                "contract_start": rec.get("Contract_Start_Date__c"),
+                "contract_end": rec.get("Contract_End_Date__c"),
+                "term_months": rec.get("Contract_Term_months__c"),
             }
 
 

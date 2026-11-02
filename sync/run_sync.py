@@ -13,7 +13,8 @@ from datetime import datetime, timezone
 from dateutil import parser as dtparse
 
 from app.db import (
-    Customer, SfdcAccount, SfdcContact, Subscription, SyncRun, init_db, session_scope,
+    Customer, SfdcAccount, SfdcContact, SfdcContract, Subscription, SyncRun, init_db,
+    session_scope,
 )
 from sync import chartmogul as cm
 from sync import sfdc
@@ -31,22 +32,48 @@ def _dt(value):
         return None
 
 
-def sync_sfdc(session) -> tuple[int, int]:
+def _d(value):
+    dt = _dt(value)
+    return dt.date() if dt else None
+
+
+def sync_sfdc_accounts(session) -> int:
     accounts = list(sfdc.fetch_accounts())
     log.info("Fetched %d SFDC accounts", len(accounts))
 
+    session.query(SfdcContract).delete()
     session.query(SfdcContact).delete()
     session.query(SfdcAccount).delete()
     for a in accounts:
         session.add(SfdcAccount(**a))
     session.flush()
+    return len(accounts)
+
+
+def sync_sfdc_details(session) -> tuple[int, int]:
+    """Contacts + contracts, only for accounts joined to a ChartMogul customer.
+    (Pulling contacts for every account with a Stripe ID would be 500k+ rows.)"""
+    account_ids = [r[0] for r in session.query(Customer.sfdc_account_id)
+                   .filter(Customer.sfdc_account_id.isnot(None)).distinct()]
+    log.info("Fetching contacts + contracts for %d matched accounts", len(account_ids))
 
     n_contacts = 0
-    for c in sfdc.fetch_contacts([a["id"] for a in accounts]):
+    for c in sfdc.fetch_contacts(account_ids):
+        c["last_active"] = _dt(c["last_active"])
         session.add(SfdcContact(**c))
         n_contacts += 1
-    log.info("Fetched %d SFDC contacts", n_contacts)
-    return len(accounts), n_contacts
+        if n_contacts % 5000 == 0:
+            session.flush()
+
+    n_contracts = 0
+    for o in sfdc.fetch_contracts(account_ids):
+        for k in ("close_date", "contract_start", "contract_end"):
+            o[k] = _d(o[k])
+        session.add(SfdcContract(**o))
+        n_contracts += 1
+
+    log.info("Fetched %d contacts, %d won contracts", n_contacts, n_contracts)
+    return n_contacts, n_contracts
 
 
 def sync_chartmogul(session) -> tuple[int, int]:
@@ -128,13 +155,16 @@ def main():
 
     try:
         with session_scope() as session:
-            n_acct, n_contact = sync_sfdc(session)
+            n_acct = sync_sfdc_accounts(session)
             n_cust, n_sub = sync_chartmogul(session)
             n_match, n_unmatch = match(session)
+            session.flush()
+            n_contact, n_contract = sync_sfdc_details(session)
             run = session.get(SyncRun, run_id)
             run.status = "success"
             run.finished_at = datetime.now(timezone.utc)
             run.accounts_synced, run.contacts_synced = n_acct, n_contact
+            run.contracts_synced = n_contract
             run.customers_synced, run.subscriptions_synced = n_cust, n_sub
             run.matched, run.unmatched = n_match, n_unmatch
     except Exception as exc:

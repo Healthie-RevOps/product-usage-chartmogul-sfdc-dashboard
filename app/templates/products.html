@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Products{% endblock %}
+
+{% block run %}
+{% if last_run %}
+<span class="run">Last sync {{ last_run.started_at.strftime("%b %d %H:%M UTC") }} · {{ last_run.status }}</span>
+{% endif %}
+{% endblock %}
+
+{% block content %}
+<h2>Products</h2>
+<p class="note">Active ChartMogul customers only. "Active users" are Salesforce contacts flagged
+  <i>Healthie User Active</i> at accounts that hold the product (account-level, not per-feature usage).</p>
+
+{% if products %}
+<table>
+  <thead><tr>
+    <th>Product / plan</th><th class="num">Customers</th><th class="num">Seats</th>
+    <th class="num">MRR</th><th class="num">ARR</th><th class="num">Active users</th><th></th>
+  </tr></thead>
+  <tbody>
+  {% for p in products %}
+    <tr>
+      <td><a href="/product?plan={{ p.plan|urlencode }}">{{ p.plan }}</a></td>
+      <td class="num">{{ "{:,}".format(p.customers) }}</td>
+      <td class="num">{{ "{:,}".format(p.seats) }}</td>
+      <td class="num">{{ p.mrr_cents|money }}</td>
+      <td class="num">{{ (p.mrr_cents * 12)|money }}</td>
+      <td class="num">{{ "{:,}".format(p.active_users) }}</td>
+      <td><a href="/product/users.csv?plan={{ p.plan|urlencode }}">CSV</a></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<div class="empty">No product data yet. Run the sync (<code>python -m sync.run_sync</code>).</div>
+{% endif %}
+{% endblock %}

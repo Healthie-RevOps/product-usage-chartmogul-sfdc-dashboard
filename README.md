@@ -1,8 +1,45 @@
 # ChartMogul × SFDC Product Dashboard
 
 Nightly pull of ChartMogul customers + subscriptions, joined read-only to Salesforce
-Accounts and Contacts, served as a web dashboard on Railway. Answers: **which customers
-have which products, at what price, and who owns them in SFDC.**
+Accounts, Contacts and closed-won Opportunities, served as a web dashboard on Railway.
+Built for Product Marketing: **which customers have which products, what they pay, what
+they're contracted for, and who the active users are (with contact info).**
+
+## Status (2026-11-02)
+
+**Not deployed yet. There is no live URL.** No Railway project exists for this repo.
+The code and smoke tests pass locally; the sync has not run against real data.
+
+| # | Requirement | Status | Source |
+|---|---|---|---|
+| 1 | Products + product usage | Products ✅ / usage ⚠️ partial | ChartMogul plans; SFDC Account usage fields |
+| 2 | Which products each customer uses | ✅ `/products` → `/product?plan=…`, `/customer/…` | ChartMogul subscriptions |
+| 3 | Revenue | ✅ MRR + ARR per product and per customer | ChartMogul |
+| 4 | Key usage metrics | ⚠️ active users, active clients, providers, health score; no feature-level usage | SFDC Account (Vitally-fed) |
+| 5 | Contacts/users actively using the product | ✅ at the account level (`Healthie_User_Active__c`) | SFDC Contact |
+| 6 | Names, emails, phone for those users | ✅ on page + CSV export (`/product/users.csv?plan=…`) | SFDC Contact |
+| 7 | Contract values | ✅ latest closed-won TCV / Year-1 ACV, contract start/end | SFDC Opportunity |
+
+### Blockers to a live URL
+1. **SFDC Connected App** (client-credentials, read-only integration user). Still open with Aaron / Edgar.
+2. **ChartMogul API key**.
+3. **Railway project**: create it, attach Postgres, create `web` + `sync` services, set env vars (see Deploy).
+4. **Set `DASH_USER`/`DASH_PASS`** before sharing. The page exposes customer contact data.
+5. **The GitHub repo is public.** No secrets are committed, but consider making it private.
+
+### Data quality, checked in prod 2026-11-02
+- `Contact.Healthie_User_Active__c`: populated (~514k active contacts org-wide). Used as the "active user" signal.
+- `Contact.Healthie_User_Last_Active__c`: **stale**. Latest value is 2024-06-04, so it is not shown as a recency signal.
+- `Account.Vitally_Platform_Feature_Usage__c`: **empty** on every account with a Stripe ID, so there is no feature-level usage.
+- `Account.No_Users_Active_last_6M__c`: always 0, not used.
+- `Account.Active_Standard_Users_Account__c`: ~9.6k of 59k Stripe-linked accounts. `Healthie_Active_Clients_Account__c`: only ~300.
+- Opportunity contract fields: TCV is on ~7k won opps; Year-1 ACV ~1.4k; contract end date ~950.
+  "Contract value" = TCV, else Year-1 ACV, else Amount, from the most recent won opp.
+
+**Usage caveat:** "active users on product X" means active Healthie users at accounts
+that pay for X. It does not mean those people use feature X. True per-product usage
+needs event data from the product DB, warehouse, or Vitally directly. That source is not
+connected yet.
 
 ## Architecture
 
@@ -26,11 +63,12 @@ Design decisions (deliberate — don't undo casually):
 
 1. Push this repo to GitHub, create a Railway project from it.
 2. Add a **Postgres** database to the project (`DATABASE_URL` is injected automatically).
-3. Create **two services from the same repo**:
-   - `web` — uses `railway.json` as-is (uvicorn start command, `/health` healthcheck).
-   - `sync` — set start command `python -m sync.run_sync` and a cron schedule
-     (Service → Settings → Cron Schedule), e.g. `0 9 * * *` (09:00 UTC ≈ 4/5am ET,
-     after ChartMogul's own Stripe import settles).
+3. Create **two services from the same repo**. `railway.json` only sets the builder.
+   Start commands live in per-service settings, because config-as-code would otherwise
+   force one start command and health check onto both services:
+   - `web`: start `uvicorn app.main:app --host 0.0.0.0 --port $PORT`, healthcheck `/health`.
+   - `sync`: start `python -m sync.run_sync`, cron `0 9 * * *` (09:00 UTC ≈ 4/5am ET,
+     after ChartMogul's own Stripe import settles), restart policy `NEVER`.
 4. Set env vars on **both** services (see `.env.example`).
 5. Trigger the sync service once manually, then open the web service URL.
 6. Web service → Settings → Networking → generate the public domain. Consider
@@ -63,6 +101,15 @@ cp .env.example .env   # fill in keys
 python -m sync.run_sync          # populates local.db (SQLite fallback)
 uvicorn app.main:app --reload
 ```
+
+## Pages
+
+- `/products`: every plan with active customers, seats, MRR, ARR, active users, CSV link
+- `/product?plan=…`: customers on that product (product MRR, total MRR, contract value/end,
+  usage, health, owner) + active users with name/email/phone
+- `/product/users.csv?plan=…`: full active-user export for that product
+- `/customer/{cm_uuid}`: products, usage figures, contracts, contacts with active-user flag
+- `/`: customer list with search / product / status / match filters
 
 ## JSON API (for other tooling / Claude skills)
 

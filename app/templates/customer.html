@@ -22,7 +22,7 @@
   <tbody>
   {% for s in c.subscriptions %}
     <tr>
-      <td>{{ s.plan_name }}</td>
+      <td><a href="/product?plan={{ s.plan_name|urlencode }}">{{ s.plan_name }}</a></td>
       <td class="num">{{ s.quantity or "—" }}</td>
       <td class="num">{{ s.mrr_cents|money(s.currency) }}</td>
       <td>{{ s.billing_cycle or "—" }}</td>
@@ -43,15 +43,53 @@
   · Matched via <span class="chip">{{ c.match_method }}</span>
   {% if c.cm_url %} · <a href="{{ c.cm_url }}" target="_blank" rel="noopener">Open in ChartMogul</a>{% endif %}
 </p>
-{% if c.sfdc_account.contacts %}
-<table style="margin-top:10px">
-  <thead><tr><th>Contact</th><th>Title</th><th>Email</th></tr></thead>
+{% set a = c.sfdc_account %}
+<div class="figures">
+  <div><b>{{ a.contacts|selectattr("user_active")|list|length }}</b><span>active Healthie users</span></div>
+  <div><b>{{ a.active_standard_users|num }}</b><span>active standard users (SFDC)</span></div>
+  <div><b>{{ a.active_clients|num }}</b><span>active clients</span></div>
+  <div><b>{{ a.num_providers|num }}</b><span>providers</span></div>
+  <div><b>{{ a.health_score or "—" }}</b><span>health score</span></div>
+</div>
+
+<h2>Contracts</h2>
+{% if a.contracts %}
+<table>
+  <thead><tr><th>Opportunity</th><th>Type</th><th>Closed</th><th class="num">Contract value</th>
+    <th class="num">Year-1 ACV</th><th>Start</th><th>End</th><th class="num">Term (mo)</th></tr></thead>
   <tbody>
-  {% for ct in c.sfdc_account.contacts %}
+  {% for k in a.contracts %}
+    <tr>
+      <td><a href="{{ lightning_base }}/lightning/r/Opportunity/{{ k.id }}/view" target="_blank" rel="noopener">{{ k.name }}</a></td>
+      <td class="status">{{ k.opp_type or "—" }}</td>
+      <td class="status">{{ k.close_date.strftime("%Y-%m-%d") if k.close_date else "—" }}</td>
+      <td class="num">{{ k.value|dollars }}</td>
+      <td class="num">{{ k.year1_acv|dollars }}</td>
+      <td class="status">{{ k.contract_start.strftime("%Y-%m-%d") if k.contract_start else "—" }}</td>
+      <td class="status">{{ k.contract_end.strftime("%Y-%m-%d") if k.contract_end else "—" }}</td>
+      <td class="num">{{ k.term_months|num }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}<p class="status">No closed-won opportunities on this account.</p>{% endif %}
+
+<h2>Contacts & users</h2>
+{% if a.contacts %}
+<table>
+  <thead><tr><th>Contact</th><th>Title</th><th>Email</th><th>Phone</th><th>Healthie user</th></tr></thead>
+  <tbody>
+  {% for ct in a.contacts|sort(attribute="user_active", reverse=true) %}
     <tr>
       <td><a href="{{ lightning_base }}/lightning/r/Contact/{{ ct.id }}/view" target="_blank" rel="noopener">{{ ct.name }}</a></td>
       <td>{{ ct.title or "—" }}</td>
       <td>{{ ct.email or "—" }}</td>
+      <td>{{ ct.phone or ct.mobile_phone or "—" }}</td>
+      <td class="status">
+        {% if ct.user_active %}<span class="chip">active</span>{% endif %}
+        {% if ct.is_org_owner %}<span class="chip qty">owner</span>{% elif ct.is_org_admin %}<span class="chip qty">admin</span>{% endif %}
+        {{ ct.user_type or "" }}
+      </td>
     </tr>
   {% endfor %}
   </tbody>

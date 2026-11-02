@@ -3,7 +3,8 @@ import os
 from contextlib import contextmanager
 
 from sqlalchemy import (
-    Column, String, Integer, BigInteger, DateTime, Text, ForeignKey, create_engine, func,
+    Boolean, Column, Date, Float, String, Integer, BigInteger, DateTime, Text, ForeignKey,
+    create_engine, func,
 )
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 
@@ -70,9 +71,21 @@ class SfdcAccount(Base):
     owner_name = Column(String)
     account_type = Column(String)
 
+    # Usage signals synced into SFDC (largely from Vitally). Fill rates vary a lot —
+    # see README "Data quality" before trusting any single one.
+    active_standard_users = Column(Float)                # Active_Standard_Users_Account__c
+    active_clients = Column(Float)                       # Healthie_Active_Clients_Account__c
+    num_providers = Column(Float)                        # Number_Of_Providers__c
+    adoption_score = Column(Float)                       # Product_Adoption_Score__c
+    health_score = Column(String)                        # Customer_Health_Score__c
+    sfdc_arr = Column(Float)                             # ARR__c (dollars)
+
     customers = relationship("Customer", back_populates="sfdc_account")
     contacts = relationship("SfdcContact", back_populates="account",
                             cascade="all, delete-orphan")
+    contracts = relationship("SfdcContract", back_populates="account",
+                             cascade="all, delete-orphan",
+                             order_by="SfdcContract.close_date.desc()")
 
 
 class SfdcContact(Base):
@@ -83,8 +96,41 @@ class SfdcContact(Base):
     name = Column(String)
     email = Column(String)
     title = Column(String)
+    phone = Column(String)
+    mobile_phone = Column(String)
+    healthie_user_id = Column(String)
+    user_active = Column(Boolean, default=False, index=True)   # Healthie_User_Active__c
+    user_type = Column(String)                                 # Standard / Support
+    last_active = Column(DateTime)                             # stale since mid-2024
+    is_org_admin = Column(Boolean, default=False)
+    is_org_owner = Column(Boolean, default=False)
 
     account = relationship("SfdcAccount", back_populates="contacts")
+
+
+class SfdcContract(Base):
+    """Closed-won Opportunities carrying contract terms. SFDC is the system of record
+    for contract value; ChartMogul MRR is what is actually being billed today."""
+    __tablename__ = "sfdc_contracts"
+
+    id = Column(String, primary_key=True)                # Opportunity Id
+    account_id = Column(String, ForeignKey("sfdc_accounts.id"), index=True)
+    name = Column(String)
+    opp_type = Column(String)
+    close_date = Column(Date)
+    amount = Column(Float)
+    total_contract_value = Column(Float)                 # Total_Contract_Value__c
+    year1_acv = Column(Float)                            # Year_1_ACV__c
+    contract_start = Column(Date)
+    contract_end = Column(Date)
+    term_months = Column(Float)
+
+    account = relationship("SfdcAccount", back_populates="contracts")
+
+    @property
+    def value(self):
+        """Best available contract value: TCV, else Year-1 ACV, else Amount."""
+        return self.total_contract_value or self.year1_acv or self.amount
 
 
 class SyncRun(Base):
@@ -98,6 +144,7 @@ class SyncRun(Base):
     subscriptions_synced = Column(Integer, default=0)
     accounts_synced = Column(Integer, default=0)
     contacts_synced = Column(Integer, default=0)
+    contracts_synced = Column(Integer, default=0)
     matched = Column(Integer, default=0)
     unmatched = Column(Integer, default=0)
     error = Column(Text)

@@ -56,6 +56,10 @@ td.num,th.num{text-align:right}
   border:1px solid var(--line)}
 h2{font-size:16px;font-weight:600;margin:26px 0 10px}
 .back{font-size:13px}
+.note{color:var(--muted);font-size:12.5px;margin:8px 0}
+.btn{display:inline-block;font-weight:500;padding:6px 14px;border-radius:4px;
+  background:var(--green);color:#fff;font-size:13px}
+.btn:hover{text-decoration:none;opacity:.9}
 @media (max-width:760px){
   .figures{flex-wrap:wrap}
   .wrap{padding:16px 12px 48px}
@@ -67,6 +71,7 @@ h2{font-size:16px;font-weight:600;margin:26px 0 10px}
 <div class="wrap">
 <header class="site">
   <h1><a href="/" style="color:inherit">Products × Accounts</a></h1>
+  <nav class="sub"><a href="/products">Products</a> · <a href="/">Customers</a></nav>
   <span class="sub">ChartMogul joined to Salesforce, refreshed nightly</span>
   {% block run %}{% endblock %}
 </header>

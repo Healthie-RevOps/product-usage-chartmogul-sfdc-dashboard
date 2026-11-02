@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}{{ plan }}{% endblock %}
+
+{% block run %}
+{% if last_run %}
+<span class="run">Last sync {{ last_run.started_at.strftime("%b %d %H:%M UTC") }} · {{ last_run.status }}</span>
+{% endif %}
+{% endblock %}
+
+{% block content %}
+<p class="back" style="margin-top:14px"><a href="/products">← All products</a></p>
+<h2 style="margin-top:6px">{{ plan }}</h2>
+
+<div class="figures">
+  <div><b>{{ "{:,}".format(totals.customers) }}</b><span>active customers</span></div>
+  <div><b>{{ totals.mrr|money }}</b><span>MRR on this product</span></div>
+  <div><b>{{ (totals.mrr * 12)|money }}</b><span>ARR on this product</span></div>
+  <div><b>{{ totals.contract_value|dollars }}</b><span>latest contract value (whole accounts)</span></div>
+  <div><b>{{ "{:,}".format(totals.active_users) }}</b><span>active users</span></div>
+  {% if totals.customers - totals.matched %}
+  <div class="warn"><b>{{ totals.customers - totals.matched }}</b><span>not matched to SFDC</span></div>
+  {% endif %}
+</div>
+
+<h2>Customers</h2>
+{% if customers %}
+<table>
+  <thead><tr>
+    <th>Customer</th><th class="num">Product MRR</th><th class="num">Total MRR</th>
+    <th class="num">Contract value</th><th>Contract end</th>
+    <th class="num">Active users</th><th class="num">Active clients</th><th>Health</th><th>Owner</th>
+  </tr></thead>
+  <tbody>
+  {% for c in customers %}
+    {% set a = c.sfdc_account %}
+    {% set lc = latest_contract(a) %}
+    <tr>
+      <td><a href="/customer/{{ c.cm_uuid }}">{{ c.name or c.email }}</a>
+        {% if not a %}<span class="flag">unmatched</span>{% endif %}</td>
+      <td class="num">{{ plan_mrr[c.cm_uuid]|money(c.currency) }}</td>
+      <td class="num">{{ c.mrr_cents|money(c.currency) }}</td>
+      <td class="num">{{ lc.value|dollars if lc else "—" }}</td>
+      <td class="status">{{ lc.contract_end.strftime("%Y-%m-%d") if lc and lc.contract_end else "—" }}</td>
+      <td class="num">{{ a.contacts|selectattr("user_active")|list|length if a else "—" }}</td>
+      <td class="num">{{ a.active_clients|num if a else "—" }}</td>
+      <td class="status">{{ a.health_score or "—" if a else "—" }}</td>
+      <td>{{ a.owner_name if a else "—" }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}<div class="empty">No active customers on this product.</div>{% endif %}
+
+<h2>Active users
+  <a class="btn" style="margin-left:10px" href="/product/users.csv?plan={{ plan|urlencode }}">Download CSV ({{ "{:,}".format(users_total) }})</a>
+</h2>
+<p class="note">Salesforce contacts flagged <i>Healthie User Active</i> at the accounts above. Owners and admins listed first.
+  {% if users_total > users|length %}Showing the first {{ users|length }}; the CSV has all of them.{% endif %}</p>
+{% if users %}
+<table>
+  <thead><tr><th>Name</th><th>Email</th><th>Phone</th><th>Title</th><th>Role</th><th>Account</th></tr></thead>
+  <tbody>
+  {% for ct, c in users %}
+    <tr>
+      <td><a href="{{ lightning_base }}/lightning/r/Contact/{{ ct.id }}/view" target="_blank" rel="noopener">{{ ct.name }}</a></td>
+      <td>{{ ct.email or "—" }}</td>
+      <td>{{ ct.phone or ct.mobile_phone or "—" }}</td>
+      <td>{{ ct.title or "—" }}</td>
+      <td class="status">{% if ct.is_org_owner %}<span class="chip">owner</span>{% elif ct.is_org_admin %}<span class="chip">admin</span>{% endif %}{{ ct.user_type or "" }}</td>
+      <td><a href="/customer/{{ c.cm_uuid }}">{{ c.sfdc_account.name }}</a></td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% else %}<div class="empty">No active users found for this product's matched accounts.</div>{% endif %}
+{% endblock %}
