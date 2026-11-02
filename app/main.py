@@ -10,7 +10,7 @@ from fastapi import FastAPI, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import case, desc, func, or_
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, selectinload
 
 from app.db import (
     Customer, SfdcAccount, SfdcContact, Subscription, SyncRun, init_db, SessionLocal,
@@ -106,7 +106,7 @@ def index(
     try:
         query = (
             session.query(Customer)
-            .options(joinedload(Customer.subscriptions), joinedload(Customer.sfdc_account))
+            .options(selectinload(Customer.subscriptions), joinedload(Customer.sfdc_account))
         )
         if q:
             like = f"%{q}%"
@@ -155,9 +155,9 @@ def customer_detail(request: Request, cm_uuid: str):
     try:
         cust = (
             session.query(Customer)
-            .options(joinedload(Customer.subscriptions),
-                     joinedload(Customer.sfdc_account).joinedload(SfdcAccount.contacts),
-                     joinedload(Customer.sfdc_account).joinedload(SfdcAccount.contracts))
+            .options(selectinload(Customer.subscriptions),
+                     selectinload(Customer.sfdc_account).selectinload(SfdcAccount.contacts),
+                     selectinload(Customer.sfdc_account).selectinload(SfdcAccount.contracts))
             .get(cm_uuid)
         )
         return templates.TemplateResponse(request, "customer.html", {
@@ -183,13 +183,16 @@ VIEWS = ("current", "former", "all")
 
 def _product_rows(session, product: str, view: str = "current"):
     """One row per customer that has ever held `product`, filtered by view."""
+    # selectinload, not joinedload: joining two collections (contacts x contracts) per
+    # account multiplies rows. Standard Seats (~1.9k customers) timed out at 90s that way.
+    holders = (session.query(Subscription.customer_uuid)
+               .filter(Subscription.product == product).distinct())
     customers = (
         session.query(Customer)
-        .join(Subscription, Subscription.customer_uuid == Customer.cm_uuid)
-        .filter(Subscription.product == product)
-        .options(joinedload(Customer.subscriptions),
-                 joinedload(Customer.sfdc_account).joinedload(SfdcAccount.contacts),
-                 joinedload(Customer.sfdc_account).joinedload(SfdcAccount.contracts))
+        .filter(Customer.cm_uuid.in_(holders))
+        .options(selectinload(Customer.subscriptions),
+                 selectinload(Customer.sfdc_account).selectinload(SfdcAccount.contacts),
+                 selectinload(Customer.sfdc_account).selectinload(SfdcAccount.contracts))
         .all()
     )
     rows, seen = [], set()
@@ -357,8 +360,8 @@ def api_account(sfdc_account_id: str):
     try:
         acct = (
             session.query(SfdcAccount)
-            .options(joinedload(SfdcAccount.customers).joinedload(Customer.subscriptions),
-                     joinedload(SfdcAccount.contacts))
+            .options(selectinload(SfdcAccount.customers).selectinload(Customer.subscriptions),
+                     selectinload(SfdcAccount.contacts))
             .get(sfdc_account_id)
         )
         if not acct:
