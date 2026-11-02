@@ -1,8 +1,10 @@
 """Salesforce read-only client.
 
-Auth: OAuth 2.0 Client Credentials Flow against a Connected App whose
-"Run As" user is a read-only integration user. No user interaction, no
-refresh-token storage — the right pattern for a headless Railway service.
+Auth, in order of preference:
+  1. OAuth 2.0 Client Credentials against a Connected App whose "Run As" user is a
+     read-only integration user (SFDC_CLIENT_ID / SFDC_CLIENT_SECRET). The target state.
+  2. SOAP username/password login (SFDC_USERNAME / SFDC_PASSWORD / SFDC_SECURITY_TOKEN).
+     Interim: currently the shared +netlify user that other RevOps Railway apps use.
 
 READ-ONLY BY DESIGN. This module intentionally has no write methods.
 Product/pricing detail stays out of SFDC (storage + philosophy).
@@ -13,14 +15,19 @@ Verify once with:
 """
 import logging
 import os
+import re
+from xml.sax.saxutils import escape
 
 import requests
 
 log = logging.getLogger("sync.sfdc")
 
-SFDC_DOMAIN = os.environ.get("SFDC_DOMAIN", "https://healthie.my.salesforce.com")
+SFDC_DOMAIN = os.environ.get("SFDC_DOMAIN", "https://healthie.my.salesforce.com").rstrip("/")
 CLIENT_ID = os.environ.get("SFDC_CLIENT_ID", "")
 CLIENT_SECRET = os.environ.get("SFDC_CLIENT_SECRET", "")
+USERNAME = os.environ.get("SFDC_USERNAME", "")
+PASSWORD = os.environ.get("SFDC_PASSWORD", "")
+SECURITY_TOKEN = os.environ.get("SFDC_SECURITY_TOKEN", "")
 API_VERSION = os.environ.get("SFDC_API_VERSION", "v61.0")
 
 ACCOUNT_ORG_ID_FIELD = os.environ.get("SFDC_ACCOUNT_ORG_ID_FIELD", "Healthie_Org_ID__c")
@@ -34,11 +41,7 @@ class SfdcError(RuntimeError):
 _token_cache: dict = {}
 
 
-def _token() -> str:
-    if _token_cache.get("access_token"):
-        return _token_cache["access_token"]
-    if not CLIENT_ID or not CLIENT_SECRET:
-        raise SfdcError("SFDC_CLIENT_ID / SFDC_CLIENT_SECRET not set")
+def _login_client_credentials() -> dict:
     resp = requests.post(
         f"{SFDC_DOMAIN}/services/oauth2/token",
         data={
@@ -50,28 +53,77 @@ def _token() -> str:
     )
     if resp.status_code != 200:
         raise SfdcError(f"Auth failed ({resp.status_code}): {resp.text[:300]}")
-    _token_cache.update(resp.json())
-    return _token_cache["access_token"]
+    data = resp.json()
+    return {"access_token": data["access_token"],
+            "instance_url": data.get("instance_url") or SFDC_DOMAIN}
+
+
+def _login_password() -> dict:
+    """SOAP login() with username + password+security token. No Connected App needed.
+    Interim auth until the read-only integration user exists (see README)."""
+    envelope = f"""<?xml version="1.0" encoding="utf-8"?>
+<env:Envelope xmlns:env="http://schemas.xmlsoap.org/soap/envelope/"
+              xmlns:urn="urn:partner.soap.sforce.com">
+  <env:Body><urn:login>
+    <urn:username>{escape(USERNAME)}</urn:username>
+    <urn:password>{escape(PASSWORD + SECURITY_TOKEN)}</urn:password>
+  </urn:login></env:Body>
+</env:Envelope>"""
+    resp = requests.post(
+        f"{SFDC_DOMAIN}/services/Soap/u/{API_VERSION.lstrip('v')}",
+        data=envelope.encode("utf-8"),
+        headers={"Content-Type": "text/xml; charset=UTF-8", "SOAPAction": "login"},
+        timeout=30,
+    )
+    if resp.status_code != 200:
+        fault = re.search(r"<faultstring>(.*?)</faultstring>", resp.text)
+        raise SfdcError(f"SOAP login failed ({resp.status_code}): "
+                        f"{fault.group(1) if fault else resp.text[:300]}")
+    session_id = re.search(r"<sessionId>(.*?)</sessionId>", resp.text)
+    server_url = re.search(r"<serverUrl>(https://[^/<]+)", resp.text)
+    if not session_id:
+        raise SfdcError("SOAP login returned no sessionId")
+    return {"access_token": session_id.group(1),
+            "instance_url": server_url.group(1) if server_url else SFDC_DOMAIN}
+
+
+def _session() -> dict:
+    """Prefer the Connected App (client credentials); fall back to username/password."""
+    if not _token_cache:
+        if CLIENT_ID and CLIENT_SECRET:
+            _token_cache.update(_login_client_credentials())
+        elif USERNAME and PASSWORD:
+            _token_cache.update(_login_password())
+        else:
+            raise SfdcError("Set SFDC_CLIENT_ID/SFDC_CLIENT_SECRET, or "
+                            "SFDC_USERNAME/SFDC_PASSWORD/SFDC_SECURITY_TOKEN")
+    return _token_cache
+
+
+def _get(url: str, params: dict | None = None) -> dict:
+    """GET with one re-auth on 401 (retries the *same* request, so pagination is safe)."""
+    for attempt in range(2):
+        headers = {"Authorization": f"Bearer {_session()['access_token']}"}
+        resp = requests.get(url, params=params, headers=headers, timeout=60)
+        if resp.status_code == 401 and attempt == 0:
+            _token_cache.clear()
+            continue
+        if resp.status_code >= 400:
+            raise SfdcError(f"{resp.status_code}: {resp.text[:400]}")
+        return resp.json()
+    raise SfdcError("Unauthorized after re-authenticating")
 
 
 def _query_all(soql: str):
     """Run a SOQL query and follow nextRecordsUrl pagination."""
-    headers = {"Authorization": f"Bearer {_token()}"}
-    url = f"{SFDC_DOMAIN}/services/data/{API_VERSION}/query"
-    resp = requests.get(url, params={"q": soql}, headers=headers, timeout=60)
+    base = _session()["instance_url"]
+    data = _get(f"{base}/services/data/{API_VERSION}/query", {"q": soql})
     while True:
-        if resp.status_code == 401:
-            _token_cache.clear()
-            headers = {"Authorization": f"Bearer {_token()}"}
-            resp = requests.get(url, params={"q": soql}, headers=headers, timeout=60)
-        if resp.status_code >= 400:
-            raise SfdcError(f"{resp.status_code}: {resp.text[:400]}")
-        data = resp.json()
         yield from data.get("records", [])
         next_url = data.get("nextRecordsUrl")
         if not next_url:
             break
-        resp = requests.get(f"{SFDC_DOMAIN}{next_url}", headers=headers, timeout=60)
+        data = _get(f"{_session()['instance_url']}{next_url}")
 
 
 # Account usage fields (verified 2026-11-02 via describe). Mostly Vitally-fed.
@@ -87,6 +139,13 @@ ACCOUNT_USAGE_FIELDS = {
 CHUNK = 300  # ids per IN (...) clause; keeps SOQL well under the 100k-char limit
 
 
+def _visible_fields(sobject: str) -> set[str]:
+    """Field API names the authenticated user can read on `sobject`."""
+    base = _session()["instance_url"]
+    desc = _get(f"{base}/services/data/{API_VERSION}/sobjects/{sobject}/describe")
+    return {f["name"] for f in desc["fields"]}
+
+
 def _chunks(ids: list[str]):
     for i in range(0, len(ids), CHUNK):
         yield ",".join(f"'{a}'" for a in ids[i:i + CHUNK])
@@ -94,10 +153,17 @@ def _chunks(ids: list[str]):
 
 def fetch_accounts():
     """Accounts that can possibly join to ChartMogul (have a Stripe ID or Org ID)."""
-    usage_cols = ", ".join(ACCOUNT_USAGE_FIELDS.values())
+    # Field-level security differs per user; drop optional usage fields this one can't see
+    # rather than failing the whole sync.
+    visible = _visible_fields("Account")
+    usage = {col: f for col, f in ACCOUNT_USAGE_FIELDS.items() if f in visible}
+    hidden = sorted(set(ACCOUNT_USAGE_FIELDS.values()) - set(usage.values()))
+    if hidden:
+        log.warning("Account usage fields not visible to this SFDC user, skipped: %s", hidden)
+    usage_cols = "".join(f", {f}" for f in usage.values())
     soql = (
         f"SELECT Id, Name, {ACCOUNT_ORG_ID_FIELD}, {ACCOUNT_STRIPE_ID_FIELD}, "
-        f"Owner.Name, Type, {usage_cols} FROM Account "
+        f"Owner.Name, Type{usage_cols} FROM Account "
         f"WHERE {ACCOUNT_ORG_ID_FIELD} != null OR {ACCOUNT_STRIPE_ID_FIELD} != null"
     )
     for rec in _query_all(soql):

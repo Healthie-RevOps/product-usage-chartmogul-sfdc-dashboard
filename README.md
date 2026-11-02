@@ -9,8 +9,8 @@ they're contracted for, and who the active users are (with contact info).**
 
 Railway project `product-usage-dashboard` (Healthie RevOps workspace) exists with Postgres,
 `web` and `sync` services. `web` is live at https://web-production-fac10.up.railway.app
-(Basic auth). **`sync` is not deployed**
-because it is waiting on SFDC + ChartMogul credentials, so the dashboard is empty until then.
+(Basic auth). `sync` is
+deployed with ChartMogul + SFDC credentials.
 
 | # | Requirement | Status | Source |
 |---|---|---|---|
@@ -22,11 +22,16 @@ because it is waiting on SFDC + ChartMogul credentials, so the dashboard is empt
 | 6 | Names, emails, phone for those users | ✅ on page + CSV export (`/product/users.csv?plan=…`) | SFDC Contact |
 | 7 | Contract values | ✅ latest closed-won TCV / Year-1 ACV, contract start/end | SFDC Opportunity |
 
-### Blockers to a live URL
-1. **SFDC Connected App** (client-credentials, read-only integration user). Still open with Aaron / Edgar.
+### Open items
+1. **SFDC auth is interim.** `sync` logs in with the shared `vivek.marthi+netlify@gethealthie.com`
+   username/password/token (SOAP login), copied from `healthie-bottoms-up-model`. The code
+   never writes to SFDC, but that user is not the read-only integration user. When the
+   Connected App exists, set `SFDC_CLIENT_ID`/`SFDC_CLIENT_SECRET` on `sync`. Client
+   credentials take priority automatically, then delete the `SFDC_USERNAME`/`PASSWORD`/
+   `SECURITY_TOKEN` vars. That user can't see `Product_Adoption_Score__c`. The sync skips
+   hidden optional fields with a warning.
 2. ~~ChartMogul API key~~: done. The read-only key from `healthie-bottoms-up-model` is set on `sync` (verified 2026-11-02).
-3. Once 1 is done, set `SFDC_CLIENT_ID` and `SFDC_CLIENT_SECRET` on `sync`,
-   run `railway up -s sync`, and set its cron schedule in the UI.
+3. Set the `sync` cron schedule in the Railway UI (`0 9 * * *`). The CLI can't set it.
 4. `DASH_USER`/`DASH_PASS` are set on `web`. View them with `railway variables -s web`.
 5. **The GitHub repo is public.** No secrets are committed, but consider making it private.
 
