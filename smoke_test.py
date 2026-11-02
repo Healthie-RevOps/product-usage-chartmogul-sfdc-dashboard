@@ -43,22 +43,35 @@ with session_scope() as s:
                    currency="USD", stripe_customer_id="cus_matched", healthie_org_id="12345",
                    sfdc_account_id="001000000000001AAA", match_method="stripe_id"))
     s.add(Subscription(cm_uuid="sub_uuid_1", customer_uuid="cus_uuid_matched",
-                       plan_name="Group Plan", external_id="sub_stripe_1", status="active",
+                       plan_name="Group Plan - Acme", product="Group Plan",
+                       is_current=True, external_id="sub_stripe_1", status="active",
                        quantity=10, mrr_cents=250000, currency="USD", billing_cycle="month",
                        start_date=datetime(2024, 1, 1)))
     s.add(Customer(cm_uuid="cus_uuid_unmatched", name="Orphan Clinic",
                    email="billing@orphan.test", status="Active", mrr_cents=50000,
                    currency="USD", stripe_customer_id="cus_orphan", match_method="unmatched"))
+    s.add(SfdcAccount(id="001000000000002AAA", name="Gone Clinic",
+                      stripe_customer_id="cus_gone", owner_name="Rep"))
+    s.add(SfdcContact(id="003000000000003AAA", account_id="001000000000002AAA",
+                      name="Old Admin", email="admin@gone.test", user_active=True))
+    s.add(Customer(cm_uuid="cus_uuid_gone", name="Gone Clinic", status="Cancelled",
+                   mrr_cents=0, stripe_customer_id="cus_gone",
+                   sfdc_account_id="001000000000002AAA", match_method="stripe_id"))
+    s.add(Subscription(cm_uuid="sub_uuid_2", customer_uuid="cus_uuid_gone",
+                       plan_name="Group Plan - Gone", product="Group Plan", is_current=False,
+                       status="cancelled", quantity=3, mrr_cents=0,
+                       start_date=datetime(2022, 1, 1), end_date=datetime(2024, 6, 30)))
     s.add(SyncRun(finished_at=datetime.now(), status="success", customers_synced=2,
                   subscriptions_synced=1, accounts_synced=1, contacts_synced=1,
                   matched=1, unmatched=1))
 
 ROUTES = [
-    "/", "/?q=acme", "/?match=matched", "/?match=unmatched", "/?plan=Group+Plan",
+    "/", "/?q=acme", "/?match=matched", "/?match=unmatched", "/?plan=Group+Plan&status=",
     "/customer/cus_uuid_matched", "/customer/cus_uuid_unmatched",
     "/api/products", "/api/account/001000000000001AAA", "/health",
-    "/products", "/product?plan=Group+Plan", "/product?plan=Nonexistent",
-    "/product/users.csv?plan=Group+Plan",
+    "/products", "/product?product=Group+Plan", "/product?product=Group+Plan&view=former",
+    "/product?product=Group+Plan&view=all", "/product?product=Nonexistent",
+    "/product/users.csv?product=Group+Plan", "/product/users.csv?product=Group+Plan&view=former",
 ]
 
 failures = []
@@ -80,8 +93,9 @@ for route in ROUTES:
 check("/api/account/<missing> -> 404", client.get("/api/account/001xxx").status_code, 404)
 
 products = client.get("/api/products").json()
-check("/api/products rollup", products, [{"plan": "Group Plan", "customers": 1,
-                                          "mrr_cents": 250000}])
+check("/api/products rollup", products, [{"product": "Group Plan", "current": 1, "former": 1,
+                                          "mrr_cents": 250000, "seats": 10,
+                                          "active_users": 1}])
 account = client.get("/api/account/001000000000001AAA").json()
 check("account has 2 contacts", len(account["contacts"]), 2)
 check("account has 1 customer", len(account["customers"]), 1)
@@ -89,13 +103,21 @@ check("customer has 1 product", len(account["customers"][0]["products"]), 1)
 check("account has 1 contract", len(account["contracts"]), 1)
 check("contract value prefers TCV", account["contracts"][0]["value"], 60000)
 
-csv_lines = client.get("/product/users.csv?plan=Group+Plan").text.strip().splitlines()
+csv_lines = client.get("/product/users.csv?product=Group+Plan").text.strip().splitlines()
 check("users.csv: header + 1 active user", len(csv_lines), 2)
 check("users.csv row has email + phone", "jane@acme.test" in csv_lines[1]
       and "555-0100" in csv_lines[1], True)
-page = client.get("/product?plan=Group+Plan").text
+page = client.get("/product?product=Group+Plan").text
 check("product page shows contract value", "$60,000" in page, True)
 check("product page excludes inactive user", "gone@acme.test" in page, False)
+check("current view excludes former customer", "Gone Clinic" in page, False)
+former = client.get("/product?product=Group+Plan&view=former").text
+check("former view lists former customer", "Gone Clinic" in former, True)
+check("former view shows end date", "2024-06-30" in former, True)
+check("former view excludes current customer", "Acme Health" in former, False)
+fcsv = client.get("/product/users.csv?product=Group+Plan&view=former").text
+check("former CSV has former user", "admin@gone.test" in fcsv and ",former," in fcsv, True)
+check("unmatched list shows any status", "Gone Clinic" in client.get("/?status=").text, True)
 
 print("\nauth enabled:")
 main.DASH_USER, main.DASH_PASS = "dashuser", "dashpass"

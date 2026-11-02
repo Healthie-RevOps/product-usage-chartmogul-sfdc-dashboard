@@ -22,7 +22,7 @@
   <tbody>
   {% for s in c.subscriptions %}
     <tr>
-      <td><a href="/product?plan={{ s.plan_name|urlencode }}">{{ s.plan_name }}</a></td>
+      <td><a href="/product?product={{ s.product|urlencode }}">{{ s.plan_name }}</a>{% if not s.is_current %} <span class="flag">ended</span>{% endif %}</td>
       <td class="num">{{ s.quantity or "—" }}</td>
       <td class="num">{{ s.mrr_cents|money(s.currency) }}</td>
       <td>{{ s.billing_cycle or "—" }}</td>

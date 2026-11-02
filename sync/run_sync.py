@@ -1,13 +1,25 @@
-"""Daily sync: ChartMogul customers/subscriptions + SFDC accounts/contacts,
-then the join. Run as a Railway cron service:  python -m sync.run_sync
+"""Daily sync, product-first. Run as a Railway cron service:  python -m sync.run_sync
+
+  1. ChartMogul: customers in CM_CUSTOMER_STATUSES (default Active,Cancelled — cancelled
+     customers keep product history; filtered server-side),
+     then each one's subscriptions fetched in parallel. Optional CM_PRODUCT_FILTER keeps
+     only the listed product families.
+  2. SFDC: only the Accounts whose Stripe Customer ID / Healthie Org ID came back in step 1
+     (not all ~212k accounts with a Stripe ID).
+  3. Match, then contacts + closed-won contracts for matched accounts.
 
 Match waterfall (recorded per customer as match_method):
   1. stripe_id — ChartMogul external_id (cus_...) == Account.Stripe_Customer_ID__c
   2. org_id   — ChartMogul custom attribute healthie_org_id == Account.Healthie_Org_ID__c
   3. unmatched — surfaced in the dashboard, never silently dropped
+
+Everything runs in one transaction, so the dashboard keeps serving the previous
+snapshot until the new one commits.
 """
 import logging
+import os
 import sys
+import time
 from datetime import datetime, timezone
 
 from dateutil import parser as dtparse
@@ -21,6 +33,11 @@ from sync import sfdc
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger("sync")
+
+CUSTOMER_STATUSES = [s.strip() for s in
+                     os.environ.get("CM_CUSTOMER_STATUSES", "Active,Cancelled").split(",") if s.strip()]
+PRODUCT_FILTER = {p.strip().lower() for p in
+                  os.environ.get("CM_PRODUCT_FILTER", "").split(",") if p.strip()}
 
 
 def _dt(value):
@@ -37,53 +54,70 @@ def _d(value):
     return dt.date() if dt else None
 
 
-def sync_sfdc_accounts(session) -> int:
-    accounts = list(sfdc.fetch_accounts())
-    log.info("Fetched %d SFDC accounts", len(accounts))
-
-    session.query(SfdcContract).delete()
-    session.query(SfdcContact).delete()
-    session.query(SfdcAccount).delete()
-    for a in accounts:
-        session.add(SfdcAccount(**a))
+def _clear(session):
+    for model in (SfdcContract, SfdcContact, Subscription, Customer, SfdcAccount):
+        session.query(model).delete()
     session.flush()
-    return len(accounts)
 
 
-def sync_sfdc_details(session) -> tuple[int, int]:
-    """Contacts + contracts, only for accounts joined to a ChartMogul customer.
-    (Pulling contacts for every account with a Stripe ID would be 500k+ rows.)"""
-    account_ids = [r[0] for r in session.query(Customer.sfdc_account_id)
-                   .filter(Customer.sfdc_account_id.isnot(None)).distinct()]
-    log.info("Fetching contacts + contracts for %d matched accounts", len(account_ids))
+def _is_current(status: str | None, end_date) -> bool:
+    """Live today. Trust ChartMogul's status when present; otherwise an end date in the
+    future (active subs carry their next renewal date) or no end date at all."""
+    if status:
+        return status.lower() == "active"
+    return end_date is None or end_date > datetime.now(timezone.utc)
 
-    n_contacts = 0
-    for c in sfdc.fetch_contacts(account_ids):
-        c["last_active"] = _dt(c["last_active"])
-        session.add(SfdcContact(**c))
-        n_contacts += 1
-        if n_contacts % 5000 == 0:
-            session.flush()
 
-    n_contracts = 0
-    for o in sfdc.fetch_contracts(account_ids):
-        for k in ("close_date", "contract_start", "contract_end"):
-            o[k] = _d(o[k])
-        session.add(SfdcContract(**o))
-        n_contracts += 1
-
-    log.info("Fetched %d contacts, %d won contracts", n_contacts, n_contracts)
-    return n_contacts, n_contracts
+def _wanted(product: str | None) -> bool:
+    return not PRODUCT_FILTER or (product or "").lower() in PRODUCT_FILTER
 
 
 def sync_chartmogul(session) -> tuple[int, int]:
-    session.query(Subscription).delete()
-    session.query(Customer).delete()
+    if PRODUCT_FILTER:
+        families = {cm.product_family(p.get("name")) for p in cm.iter_plans()}
+        unknown = sorted(p for p in PRODUCT_FILTER
+                         if p not in {(f or "").lower() for f in families})
+        if unknown:
+            log.warning("CM_PRODUCT_FILTER entries matching no ChartMogul plan: %s", unknown)
+        log.info("Product filter: %s", sorted(PRODUCT_FILTER))
 
+    raws = list(cm.iter_customers(CUSTOMER_STATUSES))
+    log.info("Listed %d ChartMogul customers with status %s", len(raws), CUSTOMER_STATUSES)
+
+    by_uuid = {r["uuid"]: r for r in raws}
     n_cust = n_sub = 0
-    for raw in cm.iter_customers():
-        cust = Customer(
-            cm_uuid=raw["uuid"],
+    t0 = time.monotonic()
+    for i, (uuid, subs) in enumerate(cm.map_subscriptions(list(by_uuid)), 1):
+        rows = []
+        for sub in subs:
+            plan = sub.get("plan") or sub.get("plan_name")
+            product = cm.product_family(plan)
+            if not _wanted(product):
+                continue
+            end = _dt(sub.get("end-date") or sub.get("end_date"))
+            if end and end.tzinfo is None:
+                end = end.replace(tzinfo=timezone.utc)
+            rows.append(Subscription(
+                cm_uuid=sub["uuid"],
+                customer_uuid=uuid,
+                plan_name=plan,
+                product=product,
+                external_id=sub.get("external_id"),
+                status=sub.get("status"),
+                is_current=_is_current(sub.get("status"), end),
+                quantity=sub.get("quantity"),
+                mrr_cents=sub.get("mrr") or 0,
+                currency=sub.get("currency") or "USD",
+                billing_cycle=sub.get("billing-cycle") or sub.get("billing_cycle"),
+                start_date=_dt(sub.get("start-date") or sub.get("start_date")),
+                end_date=end,
+            ))
+        if PRODUCT_FILTER and not rows:
+            continue  # customer has none of the products we care about
+
+        raw = by_uuid[uuid]
+        session.add(Customer(
+            cm_uuid=uuid,
             name=raw.get("name") or raw.get("company") or raw.get("email"),
             email=raw.get("email"),
             status=raw.get("status"),
@@ -92,36 +126,35 @@ def sync_chartmogul(session) -> tuple[int, int]:
             currency=raw.get("currency") or "USD",
             stripe_customer_id=cm.extract_stripe_id(raw),
             healthie_org_id=cm.extract_org_id(raw),
-            cm_url=raw.get("chartmogul_url") or raw.get("cm_url"),
-        )
-        session.add(cust)
+            cm_url=raw.get("chartmogul-url") or raw.get("chartmogul_url"),
+        ))
+        session.add_all(rows)
         n_cust += 1
+        n_sub += len(rows)
 
-        # Skip subscription calls for customers with no revenue history
-        if raw.get("status") in ("Lead",):
-            continue
-        for sub in cm.iter_subscriptions(raw["uuid"]):
-            session.add(Subscription(
-                cm_uuid=sub["uuid"],
-                customer_uuid=raw["uuid"],
-                plan_name=sub.get("plan") or sub.get("plan_name"),
-                external_id=sub.get("external_id"),
-                status=sub.get("status"),
-                quantity=sub.get("quantity"),
-                mrr_cents=sub.get("mrr") or 0,
-                currency=sub.get("currency") or "USD",
-                billing_cycle=sub.get("billing-cycle") or sub.get("billing_cycle"),
-                start_date=_dt(sub.get("start-date") or sub.get("start_date")),
-                end_date=_dt(sub.get("end-date") or sub.get("end_date")),
-            ))
-            n_sub += 1
-
-        if n_cust % 250 == 0:
-            log.info("ChartMogul progress: %d customers, %d subscriptions", n_cust, n_sub)
+        if i % 500 == 0:
+            rate = i / (time.monotonic() - t0)
+            log.info("ChartMogul progress: %d/%d customers (%.0f/s, ~%.0f min left), "
+                     "%d subscriptions", i, len(by_uuid), rate,
+                     (len(by_uuid) - i) / rate / 60, n_sub)
             session.flush()
 
-    log.info("Fetched %d customers, %d subscriptions", n_cust, n_sub)
+    log.info("Kept %d customers, %d subscriptions", n_cust, n_sub)
     return n_cust, n_sub
+
+
+def sync_sfdc_accounts(session) -> int:
+    keys = session.query(Customer.stripe_customer_id, Customer.healthie_org_id).all()
+    stripe_ids = {k[0] for k in keys if k[0]}
+    org_ids = {k[1] for k in keys if k[1]}
+    n = 0
+    for a in sfdc.fetch_accounts_for(stripe_ids, org_ids):
+        session.add(SfdcAccount(**a))
+        n += 1
+    session.flush()
+    log.info("Fetched %d SFDC accounts for %d Stripe IDs / %d Org IDs",
+             n, len(stripe_ids), len(org_ids))
+    return n
 
 
 def match(session) -> tuple[int, int]:
@@ -145,6 +178,31 @@ def match(session) -> tuple[int, int]:
     return matched, unmatched
 
 
+def sync_sfdc_details(session) -> tuple[int, int]:
+    """Contacts + contracts, only for accounts joined to a ChartMogul customer."""
+    account_ids = [r[0] for r in session.query(Customer.sfdc_account_id)
+                   .filter(Customer.sfdc_account_id.isnot(None)).distinct()]
+    log.info("Fetching contacts + contracts for %d matched accounts", len(account_ids))
+
+    n_contacts = 0
+    for c in sfdc.fetch_contacts(account_ids):
+        c["last_active"] = _dt(c["last_active"])
+        session.add(SfdcContact(**c))
+        n_contacts += 1
+        if n_contacts % 5000 == 0:
+            session.flush()
+
+    n_contracts = 0
+    for o in sfdc.fetch_contracts(account_ids):
+        for k in ("close_date", "contract_start", "contract_end"):
+            o[k] = _d(o[k])
+        session.add(SfdcContract(**o))
+        n_contracts += 1
+
+    log.info("Fetched %d contacts, %d won contracts", n_contacts, n_contracts)
+    return n_contacts, n_contracts
+
+
 def main():
     init_db()
     with session_scope() as session:
@@ -155,8 +213,9 @@ def main():
 
     try:
         with session_scope() as session:
-            n_acct = sync_sfdc_accounts(session)
+            _clear(session)
             n_cust, n_sub = sync_chartmogul(session)
+            n_acct = sync_sfdc_accounts(session)
             n_match, n_unmatch = match(session)
             session.flush()
             n_contact, n_contract = sync_sfdc_details(session)
@@ -167,6 +226,7 @@ def main():
             run.contracts_synced = n_contract
             run.customers_synced, run.subscriptions_synced = n_cust, n_sub
             run.matched, run.unmatched = n_match, n_unmatch
+        log.info("Sync complete")
     except Exception as exc:
         log.exception("Sync failed")
         with session_scope() as session:

@@ -64,8 +64,20 @@ Design decisions (deliberate — don't undo casually):
 - **Match waterfall:** ChartMogul `external_id` (Stripe `cus_...`) → `Account.Stripe Customer ID`,
   fallback Healthie Org ID (as a ChartMogul custom attribute) → `Account.Healthie Org ID`.
   Unmatched customers are surfaced at `/?match=unmatched`, never dropped.
-- **Full refresh daily.** Volumes are small enough that truncate-and-reload beats
-  incremental sync complexity. Revisit if the daily run exceeds ~20 min.
+- **Product-first sync.** ChartMogul customers are listed with a server-side status filter
+  (`CM_CUSTOMER_STATUSES`, default `Active,Cancelled`, so product history is kept).
+  Subscriptions are fetched in parallel (`CM_WORKERS`, default 10), then SFDC is queried
+  only for those customers' Stripe/Org IDs, not all ~212k Stripe-linked accounts.
+  `CM_PRODUCT_FILTER` (comma-separated product names, optional) restricts the sync to
+  specific products.
+- **Products = plan families.** ChartMogul has 877 plans, mostly per-customer variants
+  (`Standard Seats - Weis Markets Inc.`). The text before ` - ` is the product (~258 of them).
+  A subscription is *current* if ChartMogul says `active`. A customer is a *former*
+  customer of a product if they held it and nothing on it is live now.
+- **Full refresh daily, one transaction.** The dashboard serves the previous snapshot until
+  the new one commits. ChartMogul/SFDC calls retry with backoff (~5 min tolerance), because
+  ChartMogul's API returned 500s and timeouts for stretches on 2026-11-02.
+- **Schema changes:** `init_db()` adds missing columns in place (tables are reloaded nightly).
 
 ## Deploy on Railway
 
@@ -114,10 +126,10 @@ uvicorn app.main:app --reload
 
 ## Pages
 
-- `/products`: every plan with active customers, seats, MRR, ARR, active users, CSV link
-- `/product?plan=…`: customers on that product (product MRR, total MRR, contract value/end,
+- `/products`: every product (plan family) with current/former customers, seats, MRR, ARR, active users, CSV links
+- `/product?product=…&view=current|former|all`: customers on that product (product MRR, total MRR, contract value/end,
   usage, health, owner) + active users with name/email/phone
-- `/product/users.csv?plan=…`: full active-user export for that product
+- `/product/users.csv?product=…&view=…`: full active-user export for that product
 - `/customer/{cm_uuid}`: products, usage figures, contracts, contacts with active-user flag
 - `/`: customer list with search / product / status / match filters
 

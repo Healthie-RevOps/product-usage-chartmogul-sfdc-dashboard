@@ -9,7 +9,7 @@ import secrets
 from fastapi import FastAPI, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import desc, func, or_
+from sqlalchemy import case, desc, func, or_
 from sqlalchemy.orm import joinedload
 
 from app.db import (
@@ -119,13 +119,13 @@ def index(
         elif match == "unmatched":
             query = query.filter(Customer.sfdc_account_id.is_(None))
         if plan:
-            query = query.join(Subscription).filter(Subscription.plan_name == plan)
+            query = query.join(Subscription).filter(Subscription.product == plan).distinct()
 
         customers = query.order_by(desc(Customer.mrr_cents)).limit(500).all()
 
-        plans = [p[0] for p in session.query(Subscription.plan_name)
-                 .filter(Subscription.plan_name.isnot(None)).distinct()
-                 .order_by(Subscription.plan_name)]
+        plans = [p[0] for p in session.query(Subscription.product)
+                 .filter(Subscription.product.isnot(None)).distinct()
+                 .order_by(Subscription.product)]
         statuses = [s[0] for s in session.query(Customer.status).distinct() if s[0]]
 
         totals = {
@@ -172,94 +172,139 @@ def _iso(d):
 
 
 # ---------------------------------------------------------------- products
+#
+# A "product" is a ChartMogul plan family: "Standard Seats - Weis Markets" and
+# "Standard Seats - Lean" are both "Standard Seats" (Subscription.product).
+# Current customer = has a live subscription to the product today; former = had one,
+# none live now (cancelled the product, or churned entirely).
 
-def _product_customers(session, plan: str):
-    """Active customers on `plan`, with account, contacts and contracts loaded."""
-    return (
+VIEWS = ("current", "former", "all")
+
+
+def _product_rows(session, product: str, view: str = "current"):
+    """One row per customer that has ever held `product`, filtered by view."""
+    customers = (
         session.query(Customer)
         .join(Subscription, Subscription.customer_uuid == Customer.cm_uuid)
-        .filter(Subscription.plan_name == plan, Customer.status == "Active")
+        .filter(Subscription.product == product)
         .options(joinedload(Customer.subscriptions),
                  joinedload(Customer.sfdc_account).joinedload(SfdcAccount.contacts),
                  joinedload(Customer.sfdc_account).joinedload(SfdcAccount.contracts))
-        .order_by(desc(Customer.mrr_cents))
         .all()
     )
+    rows, seen = [], set()
+    for cu in customers:
+        if cu.cm_uuid in seen:
+            continue
+        seen.add(cu.cm_uuid)
+        subs = [s for s in cu.subscriptions if s.product == product]
+        current = any(s.is_current for s in subs)
+        if (view == "current" and not current) or (view == "former" and current):
+            continue
+        starts = [s.start_date for s in subs if s.start_date]
+        ends = [s.end_date for s in subs if s.end_date and not s.is_current]
+        rows.append({
+            "c": cu, "current": current,
+            "plans": sorted({s.plan_name for s in subs if s.plan_name}),
+            "product_mrr": sum(s.mrr_cents or 0 for s in subs if s.is_current),
+            "seats": sum(s.quantity or 0 for s in subs if s.is_current),
+            "first_start": min(starts) if starts else None,
+            "ended": None if current else (max(ends) if ends else None),
+        })
+    rows.sort(key=lambda r: (-r["product_mrr"], -(r["c"].mrr_cents or 0),
+                             -(r["ended"].timestamp() if r["ended"] else 0)))
+    return rows
 
 
-def _active_users(customers):
+def _active_users(rows):
     """(contact, customer) pairs for active Healthie users on these customers' accounts.
     Org owners first, then admins, then alphabetical."""
-    seen, rows = set(), []
-    for cu in customers:
+    seen, out = set(), []
+    for r in rows:
+        cu = r["c"]
         if not cu.sfdc_account:
             continue
         for ct in cu.sfdc_account.contacts:
             if ct.user_active and ct.id not in seen:
                 seen.add(ct.id)
-                rows.append((ct, cu))
-    rows.sort(key=lambda r: (not r[0].is_org_owner, not r[0].is_org_admin,
-                             (r[0].name or "").lower()))
-    return rows
+                out.append((ct, cu))
+    out.sort(key=lambda x: (not x[0].is_org_owner, not x[0].is_org_admin,
+                            (x[0].name or "").lower()))
+    return out
+
+
+def _product_rollup(session):
+    """Per product: current customers, former customers, current MRR, seats, active users."""
+    live = Subscription.is_current.is_(True)
+    per_cust = (
+        session.query(
+            Subscription.product.label("product"),
+            Subscription.customer_uuid.label("customer_uuid"),
+            func.max(case((live, 1), else_=0)).label("cur"),
+            func.sum(case((live, Subscription.mrr_cents), else_=0)).label("mrr"),
+            func.sum(case((live, Subscription.quantity), else_=0)).label("seats"),
+        )
+        .filter(Subscription.product.isnot(None))
+        .group_by(Subscription.product, Subscription.customer_uuid)
+        .subquery()
+    )
+    rows = (
+        session.query(per_cust.c.product, func.sum(per_cust.c.cur), func.count(),
+                      func.sum(per_cust.c.mrr), func.sum(per_cust.c.seats))
+        .group_by(per_cust.c.product)
+        .order_by(desc(func.sum(per_cust.c.mrr)), desc(func.count()))
+        .all()
+    )
+    active_users = dict(
+        session.query(per_cust.c.product, func.count(func.distinct(SfdcContact.id)))
+        .join(Customer, Customer.cm_uuid == per_cust.c.customer_uuid)
+        .join(SfdcContact, SfdcContact.account_id == Customer.sfdc_account_id)
+        .filter(per_cust.c.cur == 1, SfdcContact.user_active.is_(True))
+        .group_by(per_cust.c.product)
+        .all()
+    )
+    return [{
+        "product": r[0], "current": int(r[1] or 0), "former": int(r[2] - (r[1] or 0)),
+        "mrr_cents": int(r[3] or 0), "seats": int(r[4] or 0),
+        "active_users": active_users.get(r[0], 0),
+    } for r in rows]
 
 
 @app.get("/products", response_class=HTMLResponse)
 def products(request: Request):
     session = SessionLocal()
     try:
-        rows = (
-            session.query(
-                Subscription.plan_name,
-                func.count(func.distinct(Subscription.customer_uuid)),
-                func.sum(Subscription.mrr_cents),
-                func.sum(Subscription.quantity),
-            )
-            .join(Customer, Customer.cm_uuid == Subscription.customer_uuid)
-            .filter(Customer.status == "Active", Subscription.plan_name.isnot(None))
-            .group_by(Subscription.plan_name)
-            .order_by(desc(func.sum(Subscription.mrr_cents)))
-            .all()
-        )
-        # Active Healthie users at the accounts holding each plan.
-        active_users = dict(
-            session.query(Subscription.plan_name, func.count(func.distinct(SfdcContact.id)))
-            .join(Customer, Customer.cm_uuid == Subscription.customer_uuid)
-            .join(SfdcContact, SfdcContact.account_id == Customer.sfdc_account_id)
-            .filter(Customer.status == "Active", SfdcContact.user_active.is_(True))
-            .group_by(Subscription.plan_name)
-            .all()
-        )
-        items = [{
-            "plan": r[0], "customers": r[1], "mrr_cents": int(r[2] or 0),
-            "seats": int(r[3] or 0), "active_users": active_users.get(r[0], 0),
-        } for r in rows]
         return templates.TemplateResponse(request, "products.html", {
-            "products": items, "last_run": _last_run(session),
+            "products": _product_rollup(session), "last_run": _last_run(session),
         })
     finally:
         session.close()
 
 
 @app.get("/product", response_class=HTMLResponse)
-def product_detail(request: Request, plan: str = Query(...)):
+def product_detail(request: Request, product: str = Query(...),
+                   view: str = Query("current")):
+    view = view if view in VIEWS else "current"
     session = SessionLocal()
     try:
-        customers = _product_customers(session, plan)
-        users = _active_users(customers)
-        plan_mrr = {cu.cm_uuid: sum(s.mrr_cents or 0 for s in cu.subscriptions
-                                    if s.plan_name == plan) for cu in customers}
-        accounts = {cu.sfdc_account.id: cu.sfdc_account for cu in customers if cu.sfdc_account}
+        all_rows = _product_rows(session, product, "all")
+        rows = [r for r in all_rows if view == "all" or r["current"] == (view == "current")]
+        users = _active_users(rows)
+        accounts = {r["c"].sfdc_account.id: r["c"].sfdc_account
+                    for r in rows if r["c"].sfdc_account}
         contract_total = sum((latest_contract(a).value if latest_contract(a) else 0)
                              for a in accounts.values())
         totals = {
-            "customers": len(customers),
-            "mrr": sum(plan_mrr.values()),
-            "matched": sum(1 for cu in customers if cu.sfdc_account),
+            "current": sum(1 for r in all_rows if r["current"]),
+            "former": sum(1 for r in all_rows if not r["current"]),
+            "shown": len(rows),
+            "mrr": sum(r["product_mrr"] for r in all_rows),
+            "matched": sum(1 for r in rows if r["c"].sfdc_account),
             "active_users": len(users),
             "contract_value": contract_total,
         }
         return templates.TemplateResponse(request, "product.html", {
-            "plan": plan, "customers": customers, "plan_mrr": plan_mrr,
+            "product": product, "view": view, "rows": rows[:1000],
             "users": users[:500], "users_total": len(users), "totals": totals,
             "lightning_base": LIGHTNING_BASE, "last_run": _last_run(session),
         })
@@ -268,47 +313,39 @@ def product_detail(request: Request, plan: str = Query(...)):
 
 
 @app.get("/product/users.csv")
-def product_users_csv(plan: str = Query(...)):
-    """Active users at customers on `plan`: name, email, phone. For marketing lists."""
+def product_users_csv(product: str = Query(...), view: str = Query("current")):
+    """Active users at customers of `product` (current/former/all): name, email, phone."""
+    view = view if view in VIEWS else "current"
     session = SessionLocal()
     try:
-        users = _active_users(_product_customers(session, plan))
+        rows = _product_rows(session, product, view)
+        by_cust = {r["c"].cm_uuid: r for r in rows}
         buf = io.StringIO()
         w = csv.writer(buf)
         w.writerow(["name", "email", "phone", "mobile_phone", "title", "user_type",
                     "org_owner", "org_admin", "account", "sfdc_account_id",
-                    "sfdc_contact_id", "customer_mrr_usd", "product"])
-        for ct, cu in users:
+                    "sfdc_contact_id", "product", "product_status", "product_mrr_usd",
+                    "product_ended", "customer_status"])
+        for ct, cu in _active_users(rows):
+            r = by_cust[cu.cm_uuid]
             w.writerow([ct.name, ct.email, ct.phone, ct.mobile_phone, ct.title, ct.user_type,
                         ct.is_org_owner, ct.is_org_admin, cu.sfdc_account.name,
-                        cu.sfdc_account.id, ct.id, (cu.mrr_cents or 0) / 100, plan])
-        safe = "".join(ch if ch.isalnum() else "_" for ch in plan)[:60]
+                        cu.sfdc_account.id, ct.id, product,
+                        "current" if r["current"] else "former", r["product_mrr"] / 100,
+                        r["ended"].date().isoformat() if r["ended"] else "", cu.status])
+        safe = "".join(ch if ch.isalnum() else "_" for ch in product)[:60]
         return Response(buf.getvalue(), media_type="text/csv", headers={
-            "Content-Disposition": f'attachment; filename="active_users_{safe}.csv"'})
+            "Content-Disposition": f'attachment; filename="users_{safe}_{view}.csv"'})
     finally:
         session.close()
 
 
 @app.get("/api/products")
 def api_products():
-    """Product mix rollup: per plan — customer count and MRR."""
+    """Product rollup: per product family - current/former customers, MRR, seats."""
     session = SessionLocal()
     try:
-        rows = (
-            session.query(
-                Subscription.plan_name,
-                func.count(func.distinct(Subscription.customer_uuid)),
-                func.sum(Subscription.mrr_cents),
-            )
-            .join(Customer, Customer.cm_uuid == Subscription.customer_uuid)
-            .filter(Customer.status == "Active")
-            .group_by(Subscription.plan_name)
-            .order_by(desc(func.sum(Subscription.mrr_cents)))
-            .all()
-        )
-        return JSONResponse([
-            {"plan": r[0], "customers": r[1], "mrr_cents": int(r[2] or 0)} for r in rows
-        ])
+        return JSONResponse(_product_rollup(session))
     finally:
         session.close()
 

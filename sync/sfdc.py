@@ -16,6 +16,7 @@ Verify once with:
 import logging
 import os
 import re
+import time
 from xml.sax.saxutils import escape
 
 import requests
@@ -101,17 +102,30 @@ def _session() -> dict:
 
 
 def _get(url: str, params: dict | None = None) -> dict:
-    """GET with one re-auth on 401 (retries the *same* request, so pagination is safe)."""
-    for attempt in range(2):
+    """GET with one re-auth on 401 and backoff on network errors / 5xx. Retries the
+    *same* request, so pagination is safe."""
+    reauthed = False
+    for attempt in range(6):
+        wait = min(2 ** attempt, 30)
         headers = {"Authorization": f"Bearer {_session()['access_token']}"}
-        resp = requests.get(url, params=params, headers=headers, timeout=60)
-        if resp.status_code == 401 and attempt == 0:
+        try:
+            resp = requests.get(url, params=params, headers=headers, timeout=120)
+        except (requests.ConnectionError, requests.Timeout) as exc:
+            log.warning("SFDC %s, retrying in %ss", type(exc).__name__, wait)
+            time.sleep(wait)
+            continue
+        if resp.status_code == 401 and not reauthed:
             _token_cache.clear()
+            reauthed = True
+            continue
+        if resp.status_code >= 500:
+            log.warning("SFDC %s, retrying in %ss", resp.status_code, wait)
+            time.sleep(wait)
             continue
         if resp.status_code >= 400:
             raise SfdcError(f"{resp.status_code}: {resp.text[:400]}")
         return resp.json()
-    raise SfdcError("Unauthorized after re-authenticating")
+    raise SfdcError(f"Gave up on {url} after retries")
 
 
 def _query_all(soql: str):
@@ -146,25 +160,49 @@ def _visible_fields(sobject: str) -> set[str]:
     return {f["name"] for f in desc["fields"]}
 
 
+_usage_cache: dict = {}
+
+
+def _usage_fields() -> dict:
+    """ACCOUNT_USAGE_FIELDS minus any the logged-in user can't see (checked once)."""
+    if not _usage_cache:
+        visible = _visible_fields("Account")
+        _usage_cache.update({c: f for c, f in ACCOUNT_USAGE_FIELDS.items() if f in visible})
+        hidden = sorted(set(ACCOUNT_USAGE_FIELDS.values()) - set(_usage_cache.values()))
+        if hidden:
+            log.warning("Account usage fields not visible to this SFDC user, skipped: %s",
+                        hidden)
+    return _usage_cache
+
+
 def _chunks(ids: list[str]):
     for i in range(0, len(ids), CHUNK):
         yield ",".join(f"'{a}'" for a in ids[i:i + CHUNK])
 
 
-def fetch_accounts():
-    """Accounts that can possibly join to ChartMogul (have a Stripe ID or Org ID)."""
+def fetch_accounts_for(stripe_ids, org_ids):
+    """Only the Accounts whose Stripe Customer ID or Healthie Org ID came back from
+    ChartMogul. Deduplicated by Id (an account can match on both keys)."""
+    seen = set()
+    for field, keys in ((ACCOUNT_STRIPE_ID_FIELD, stripe_ids), (ACCOUNT_ORG_ID_FIELD, org_ids)):
+        keys = sorted({str(k).replace("'", "") for k in keys if k})
+        for ids in _chunks(keys):
+            for row in fetch_accounts(f"{field} IN ({ids})"):
+                if row["id"] not in seen:
+                    seen.add(row["id"])
+                    yield row
+
+
+def fetch_accounts(where: str | None = None):
+    """Accounts matching `where`; default: any account with a Stripe ID or Org ID."""
     # Field-level security differs per user; drop optional usage fields this one can't see
     # rather than failing the whole sync.
-    visible = _visible_fields("Account")
-    usage = {col: f for col, f in ACCOUNT_USAGE_FIELDS.items() if f in visible}
-    hidden = sorted(set(ACCOUNT_USAGE_FIELDS.values()) - set(usage.values()))
-    if hidden:
-        log.warning("Account usage fields not visible to this SFDC user, skipped: %s", hidden)
+    usage = _usage_fields()
     usage_cols = "".join(f", {f}" for f in usage.values())
+    where = where or f"{ACCOUNT_ORG_ID_FIELD} != null OR {ACCOUNT_STRIPE_ID_FIELD} != null"
     soql = (
         f"SELECT Id, Name, {ACCOUNT_ORG_ID_FIELD}, {ACCOUNT_STRIPE_ID_FIELD}, "
-        f"Owner.Name, Type{usage_cols} FROM Account "
-        f"WHERE {ACCOUNT_ORG_ID_FIELD} != null OR {ACCOUNT_STRIPE_ID_FIELD} != null"
+        f"Owner.Name, Type{usage_cols} FROM Account WHERE {where}"
     )
     for rec in _query_all(soql):
         row = {

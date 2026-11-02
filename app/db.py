@@ -4,7 +4,7 @@ from contextlib import contextmanager
 
 from sqlalchemy import (
     Boolean, Column, Date, Float, String, Integer, BigInteger, DateTime, Text, ForeignKey,
-    create_engine, func,
+    create_engine, func, inspect, text,
 )
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 
@@ -49,8 +49,10 @@ class Subscription(Base):
     cm_uuid = Column(String, primary_key=True)           # ChartMogul subscription UUID
     customer_uuid = Column(String, ForeignKey("customers.cm_uuid"), index=True)
     plan_name = Column(String, index=True)
+    product = Column(String, index=True)                 # family: plan name before " - "
     external_id = Column(String)                         # Stripe subscription id
     status = Column(String)                              # active / cancelled / etc.
+    is_current = Column(Boolean, default=False, index=True)   # live today (see run_sync)
     quantity = Column(Integer)
     mrr_cents = Column(BigInteger, default=0)
     currency = Column(String, default="USD")
@@ -152,6 +154,23 @@ class SyncRun(Base):
 
 def init_db():
     Base.metadata.create_all(engine)
+    _add_missing_columns()
+
+
+def _add_missing_columns():
+    """create_all() never alters existing tables. Every table here is truncated and
+    reloaded by the sync, so adding new nullable columns in place is a safe migration."""
+    insp = inspect(engine)
+    with engine.begin() as conn:
+        for table in Base.metadata.sorted_tables:
+            if not insp.has_table(table.name):
+                continue
+            existing = {c["name"] for c in insp.get_columns(table.name)}
+            for col in table.columns:
+                if col.name not in existing:
+                    coltype = col.type.compile(dialect=engine.dialect)
+                    conn.execute(text(
+                        f'ALTER TABLE {table.name} ADD COLUMN "{col.name}" {coltype}'))
 
 
 @contextmanager
