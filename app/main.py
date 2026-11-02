@@ -5,21 +5,20 @@ import csv
 import io
 import os
 import secrets
-
+from datetime import date
 from urllib.parse import quote
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel
-from sqlalchemy import case, desc, func, or_
-from sqlalchemy.orm import joinedload, selectinload
+from sqlalchemy import desc
+from sqlalchemy.orm import selectinload
 from starlette.middleware.sessions import SessionMiddleware
 
-from app import auth
-from app.db import (
-    Customer, SfdcAccount, SfdcContact, Subscription, SyncRun, init_db, SessionLocal,
-)
+from app import auth, data
+from app.db import Customer, SfdcAccount, SfdcContract, SyncRun, init_db, SessionLocal
 
 app = FastAPI(title="Healthie ChartMogul x SFDC", docs_url=None, redoc_url=None,
               openapi_url=None)
@@ -33,6 +32,7 @@ LIGHTNING_BASE = SFDC_DOMAIN.replace(".my.salesforce.com", ".lightning.force.com
 DASH_USER = os.environ.get("DASH_USER", "")
 DASH_PASS = os.environ.get("DASH_PASS", "")
 PUBLIC_PATHS = {"/health", "/login", "/auth/google", "/logout"}
+PUBLIC_PREFIXES = ("/static/",)  # logos, CSS, JS: nothing sensitive, needed by /login
 
 
 def _basic_ok(request: Request) -> bool:
@@ -53,7 +53,7 @@ async def require_sign_in(request: Request, call_next):
     """@gethealthie.com Google sign-in over everything except PUBLIC_PATHS.
     Fails closed: no SESSION_SECRET (and no ALLOW_INSECURE_NO_AUTH=1) -> 503."""
     path = request.url.path
-    if path in PUBLIC_PATHS:
+    if path in PUBLIC_PATHS or path.startswith(PUBLIC_PREFIXES):
         return await call_next(request)
     if not auth.configured():
         return Response("Sign-in is not configured (SESSION_SECRET is missing).",
@@ -85,7 +85,7 @@ def _safe_next(target: str | None) -> str:
     """Only same-site relative paths: blocks open redirects like //evil.com."""
     if target and target.startswith("/") and not target.startswith("//") and "\\" not in target:
         return target
-    return "/products"
+    return "/"
 
 
 @app.get("/login", response_class=HTMLResponse)
@@ -127,6 +127,10 @@ def startup():
     init_db()
 
 
+app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")),
+          name="static")
+
+
 def _money(cents, currency="USD"):
     symbol = "$" if currency in (None, "USD") else f"{currency} "
     return f"{symbol}{(cents or 0) / 100:,.0f}"
@@ -145,71 +149,28 @@ templates.env.filters["dollars"] = _dollars
 templates.env.filters["num"] = _num
 
 
-def latest_contract(account):
-    """Most recent closed-won opportunity that carries a contract value."""
-    if not account:
-        return None
-    return next((c for c in account.contracts if c.value), None)
-
-
-templates.env.globals["latest_contract"] = latest_contract
+def _iso(d):
+    return d.isoformat() if d else None
 
 
 def _last_run(session):
     return session.query(SyncRun).order_by(desc(SyncRun.id)).first()
 
 
+def _page(request, name, ctx, session, status_code=200):
+    ctx = {"user": auth.current_user(request), "insecure": auth.insecure(),
+           "last_run": _last_run(session), "lightning_base": LIGHTNING_BASE, **ctx}
+    return templates.TemplateResponse(request, name, ctx, status_code=status_code)
+
+
+# ---------------------------------------------------------------- pages
+
 @app.get("/", response_class=HTMLResponse)
-def index(
-    request: Request,
-    q: str = Query("", description="search name/email"),
-    plan: str = Query(""),
-    status: str = Query("Active"),
-    match: str = Query(""),
-):
+def explorer(request: Request):
     session = SessionLocal()
     try:
-        query = (
-            session.query(Customer)
-            .options(selectinload(Customer.subscriptions), joinedload(Customer.sfdc_account))
-        )
-        if q:
-            like = f"%{q}%"
-            query = query.filter(or_(Customer.name.ilike(like), Customer.email.ilike(like),
-                                     Customer.healthie_org_id.ilike(like)))
-        if status:
-            query = query.filter(Customer.status == status)
-        if match == "matched":
-            query = query.filter(Customer.sfdc_account_id.isnot(None))
-        elif match == "unmatched":
-            query = query.filter(Customer.sfdc_account_id.is_(None))
-        if plan:
-            query = query.join(Subscription).filter(Subscription.product == plan).distinct()
-
-        customers = query.order_by(desc(Customer.mrr_cents)).limit(500).all()
-
-        plans = [p[0] for p in session.query(Subscription.product)
-                 .filter(Subscription.product.isnot(None)).distinct()
-                 .order_by(Subscription.product)]
-        statuses = [s[0] for s in session.query(Customer.status).distinct() if s[0]]
-
-        totals = {
-            "customers": session.query(func.count(Customer.cm_uuid))
-                                .filter(Customer.status == "Active").scalar() or 0,
-            "mrr": session.query(func.sum(Customer.mrr_cents))
-                          .filter(Customer.status == "Active").scalar() or 0,
-            "matched": session.query(func.count(Customer.cm_uuid))
-                              .filter(Customer.sfdc_account_id.isnot(None)).scalar() or 0,
-            "unmatched": session.query(func.count(Customer.cm_uuid))
-                                .filter(Customer.sfdc_account_id.is_(None)).scalar() or 0,
-        }
-
-        return templates.TemplateResponse(request, "index.html", {
-            "customers": customers, "plans": plans,
-            "statuses": statuses, "totals": totals, "q": q, "plan": plan,
-            "status": status, "match": match, "last_run": _last_run(session),
-            "lightning_base": LIGHTNING_BASE,
-        })
+        snap = data.snapshot(session)
+        return _page(request, "explorer.html", {"products": snap.products}, session)
     finally:
         session.close()
 
@@ -218,194 +179,60 @@ def index(
 def customer_detail(request: Request, cm_uuid: str):
     session = SessionLocal()
     try:
-        cust = (
-            session.query(Customer)
-            .options(selectinload(Customer.subscriptions),
-                     selectinload(Customer.sfdc_account).selectinload(SfdcAccount.contacts),
-                     selectinload(Customer.sfdc_account).selectinload(SfdcAccount.contracts))
-            .get(cm_uuid)
-        )
-        return templates.TemplateResponse(request, "customer.html", {
-            "c": cust, "lightning_base": LIGHTNING_BASE,
-        })
+        snap = data.snapshot(session)
+        c = snap.customers.get(cm_uuid)
+        if not c:
+            return _page(request, "customer.html", {"c": None}, session, status_code=404)
+        acct = snap.accounts.get(c["account_id"]) if c["account_id"] else None
+        contracts = (session.query(SfdcContract)
+                     .filter(SfdcContract.account_id == c["account_id"])
+                     .order_by(desc(SfdcContract.close_date)).all() if acct else [])
+        history = data.customer_history(session, snap, cm_uuid)
+        contacts = data.contacts_for(session, snap, [cm_uuid], active_only=False)
+        return _page(request, "customer.html", {
+            "c": c, "acct": acct, "contracts": contracts, "history": history,
+            "contacts": contacts,
+        }, session)
     finally:
         session.close()
 
 
-def _iso(d):
-    return d.isoformat() if d else None
+# Old URLs from the first version of the dashboard.
+@app.get("/products")
+def old_products():
+    return RedirectResponse("/", status_code=301)
 
 
-# ---------------------------------------------------------------- products
-#
-# A "product" is a ChartMogul plan family: "Standard Seats - Weis Markets" and
-# "Standard Seats - Lean" are both "Standard Seats" (Subscription.product).
-# Current customer = has a live subscription to the product today; former = had one,
-# none live now (cancelled the product, or churned entirely).
-
-VIEWS = ("current", "former", "all")
+@app.get("/product")
+def old_product(product: str = Query(""), view: str = Query("current")):
+    return RedirectResponse(f"/?product={quote(product)}&view={quote(view)}", status_code=301)
 
 
-def _product_rows(session, product: str, view: str = "current"):
-    """One row per customer that has ever held `product`, filtered by view."""
-    # selectinload, not joinedload: joining two collections (contacts x contracts) per
-    # account multiplies rows. Standard Seats (~1.9k customers) timed out at 90s that way.
-    holders = (session.query(Subscription.customer_uuid)
-               .filter(Subscription.product == product).distinct())
-    customers = (
-        session.query(Customer)
-        .filter(Customer.cm_uuid.in_(holders))
-        .options(selectinload(Customer.subscriptions),
-                 selectinload(Customer.sfdc_account).selectinload(SfdcAccount.contacts),
-                 selectinload(Customer.sfdc_account).selectinload(SfdcAccount.contracts))
-        .all()
-    )
-    rows, seen = [], set()
-    for cu in customers:
-        if cu.cm_uuid in seen:
-            continue
-        seen.add(cu.cm_uuid)
-        subs = [s for s in cu.subscriptions if s.product == product]
-        current = any(s.is_current for s in subs)
-        if (view == "current" and not current) or (view == "former" and current):
-            continue
-        starts = [s.start_date for s in subs if s.start_date]
-        ends = [s.end_date for s in subs if s.end_date and not s.is_current]
-        rows.append({
-            "c": cu, "current": current,
-            "plans": sorted({s.plan_name for s in subs if s.plan_name}),
-            "product_mrr": sum(s.mrr_cents or 0 for s in subs if s.is_current),
-            "seats": sum(s.quantity or 0 for s in subs if s.is_current),
-            "first_start": min(starts) if starts else None,
-            "ended": None if current else (max(ends) if ends else None),
-        })
-    rows.sort(key=lambda r: (-r["product_mrr"], -(r["c"].mrr_cents or 0),
-                             -(r["ended"].timestamp() if r["ended"] else 0)))
+# ---------------------------------------------------------------- explorer API
+
+class Spec(BaseModel):
+    """A selection: filters, optionally narrowed to explicit customers / contacts."""
+    products: list[str] = []
+    view: str = "current"
+    match: str = "all"
+    q: str = ""
+    customer_uuids: list[str] | None = None   # None = every customer matching the filters
+    contact_ids: list[str] | None = None      # None = every contact matching below
+    active_only: bool = True
+    role: str = "all"                          # all | admins
+    contact_q: str = ""
+
+
+def _spec_customers(snap, spec: Spec) -> list[dict]:
+    rows = data.customer_rows(snap, spec.products, spec.view, spec.match, spec.q)
+    if spec.customer_uuids is not None:
+        keep = set(spec.customer_uuids)
+        rows = [r for r in rows if r["uuid"] in keep]
     return rows
 
 
-def _active_users(rows):
-    """(contact, customer) pairs for active Healthie users on these customers' accounts.
-    Org owners first, then admins, then alphabetical."""
-    seen, out = set(), []
-    for r in rows:
-        cu = r["c"]
-        if not cu.sfdc_account:
-            continue
-        for ct in cu.sfdc_account.contacts:
-            if ct.user_active and ct.id not in seen:
-                seen.add(ct.id)
-                out.append((ct, cu))
-    out.sort(key=lambda x: (not x[0].is_org_owner, not x[0].is_org_admin,
-                            (x[0].name or "").lower()))
-    return out
-
-
-def _product_rollup(session):
-    """Per product: current customers, former customers, current MRR, seats, active users."""
-    live = Subscription.is_current.is_(True)
-    per_cust = (
-        session.query(
-            Subscription.product.label("product"),
-            Subscription.customer_uuid.label("customer_uuid"),
-            func.max(case((live, 1), else_=0)).label("cur"),
-            func.sum(case((live, Subscription.mrr_cents), else_=0)).label("mrr"),
-            func.sum(case((live, Subscription.quantity), else_=0)).label("seats"),
-        )
-        .filter(Subscription.product.isnot(None))
-        .group_by(Subscription.product, Subscription.customer_uuid)
-        .subquery()
-    )
-    rows = (
-        session.query(per_cust.c.product, func.sum(per_cust.c.cur), func.count(),
-                      func.sum(per_cust.c.mrr), func.sum(per_cust.c.seats))
-        .group_by(per_cust.c.product)
-        .order_by(desc(func.sum(per_cust.c.mrr)), desc(func.count()))
-        .all()
-    )
-    active_users = dict(
-        session.query(per_cust.c.product, func.count(func.distinct(SfdcContact.id)))
-        .join(Customer, Customer.cm_uuid == per_cust.c.customer_uuid)
-        .join(SfdcContact, SfdcContact.account_id == Customer.sfdc_account_id)
-        .filter(per_cust.c.cur == 1, SfdcContact.user_active.is_(True))
-        .group_by(per_cust.c.product)
-        .all()
-    )
-    return [{
-        "product": r[0], "current": int(r[1] or 0), "former": int(r[2] - (r[1] or 0)),
-        "mrr_cents": int(r[3] or 0), "seats": int(r[4] or 0),
-        "active_users": active_users.get(r[0], 0),
-    } for r in rows]
-
-
-@app.get("/products", response_class=HTMLResponse)
-def products(request: Request):
-    session = SessionLocal()
-    try:
-        return templates.TemplateResponse(request, "products.html", {
-            "products": _product_rollup(session), "last_run": _last_run(session),
-        })
-    finally:
-        session.close()
-
-
-@app.get("/product", response_class=HTMLResponse)
-def product_detail(request: Request, product: str = Query(...),
-                   view: str = Query("current")):
-    view = view if view in VIEWS else "current"
-    session = SessionLocal()
-    try:
-        all_rows = _product_rows(session, product, "all")
-        rows = [r for r in all_rows if view == "all" or r["current"] == (view == "current")]
-        users = _active_users(rows)
-        accounts = {r["c"].sfdc_account.id: r["c"].sfdc_account
-                    for r in rows if r["c"].sfdc_account}
-        contract_total = sum((latest_contract(a).value if latest_contract(a) else 0)
-                             for a in accounts.values())
-        totals = {
-            "current": sum(1 for r in all_rows if r["current"]),
-            "former": sum(1 for r in all_rows if not r["current"]),
-            "shown": len(rows),
-            "mrr": sum(r["product_mrr"] for r in all_rows),
-            "matched": sum(1 for r in rows if r["c"].sfdc_account),
-            "active_users": len(users),
-            "contract_value": contract_total,
-        }
-        return templates.TemplateResponse(request, "product.html", {
-            "product": product, "view": view, "rows": rows[:1000],
-            "users": users[:500], "users_total": len(users), "totals": totals,
-            "lightning_base": LIGHTNING_BASE, "last_run": _last_run(session),
-        })
-    finally:
-        session.close()
-
-
-@app.get("/product/users.csv")
-def product_users_csv(product: str = Query(...), view: str = Query("current")):
-    """Active users at customers of `product` (current/former/all): name, email, phone."""
-    view = view if view in VIEWS else "current"
-    session = SessionLocal()
-    try:
-        rows = _product_rows(session, product, view)
-        by_cust = {r["c"].cm_uuid: r for r in rows}
-        buf = io.StringIO()
-        w = csv.writer(buf)
-        w.writerow(["name", "email", "phone", "mobile_phone", "title", "user_type",
-                    "org_owner", "org_admin", "account", "sfdc_account_id",
-                    "sfdc_contact_id", "product", "product_status", "product_mrr_usd",
-                    "product_ended", "customer_status"])
-        for ct, cu in _active_users(rows):
-            r = by_cust[cu.cm_uuid]
-            w.writerow([ct.name, ct.email, ct.phone, ct.mobile_phone, ct.title, ct.user_type,
-                        ct.is_org_owner, ct.is_org_admin, cu.sfdc_account.name,
-                        cu.sfdc_account.id, ct.id, product,
-                        "current" if r["current"] else "former", r["product_mrr"] / 100,
-                        r["ended"].date().isoformat() if r["ended"] else "", cu.status])
-        safe = "".join(ch if ch.isalnum() else "_" for ch in product)[:60]
-        return Response(buf.getvalue(), media_type="text/csv", headers={
-            "Content-Disposition": f'attachment; filename="users_{safe}_{view}.csv"'})
-    finally:
-        session.close()
+ROW_LIMIT = 2000
+CONTACT_LIMIT = 3000
 
 
 @app.get("/api/products")
@@ -413,10 +240,143 @@ def api_products():
     """Product rollup: per product family - current/former customers, MRR, seats."""
     session = SessionLocal()
     try:
-        return JSONResponse(_product_rollup(session))
+        return JSONResponse(data.snapshot(session).products)
     finally:
         session.close()
 
+
+@app.get("/api/explore")
+def api_explore(product: list[str] = Query([]), view: str = "current", match: str = "all",
+                q: str = ""):
+    session = SessionLocal()
+    try:
+        snap = data.snapshot(session)
+        rows = data.customer_rows(snap, product, view, match, q)
+        return JSONResponse({"totals": data.totals(snap, rows, product),
+                             "rows": rows[:ROW_LIMIT], "limit": ROW_LIMIT})
+    finally:
+        session.close()
+
+
+@app.get("/api/trend")
+def api_trend(product: list[str] = Query([])):
+    session = SessionLocal()
+    try:
+        return JSONResponse(data.product_trend(session, data.snapshot(session), product))
+    finally:
+        session.close()
+
+
+@app.post("/api/contacts")
+def api_contacts(spec: Spec):
+    session = SessionLocal()
+    try:
+        snap = data.snapshot(session)
+        uuids = [r["uuid"] for r in _spec_customers(snap, spec)]
+        rows = data.contacts_for(session, snap, uuids, spec.active_only, spec.role,
+                                 spec.contact_q)
+        return JSONResponse({"total": len(rows), "rows": rows[:CONTACT_LIMIT],
+                             "limit": CONTACT_LIMIT, "customers": len(uuids)})
+    finally:
+        session.close()
+
+
+@app.get("/api/customer/{cm_uuid}/history")
+def api_customer_history(cm_uuid: str):
+    session = SessionLocal()
+    try:
+        snap = data.snapshot(session)
+        if cm_uuid not in snap.customers:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return JSONResponse(data.customer_history(session, snap, cm_uuid))
+    finally:
+        session.close()
+
+
+# ---------------------------------------------------------------- CSV exports
+# Form POSTs (a `spec` JSON field) so a selection of thousands of IDs fits. The session
+# cookie is SameSite=Lax, so other sites can't trigger these with the user's session.
+
+def _csv_response(header: list[str], rows, filename: str) -> Response:
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(header)
+    for r in rows:
+        w.writerow(["" if v is None else v for v in r])
+    return Response(buf.getvalue(), media_type="text/csv", headers={
+        "Content-Disposition": f'attachment; filename="{filename}"'})
+
+
+def _read_spec(raw: str) -> Spec:
+    try:
+        return Spec.model_validate_json(raw or "{}")
+    except ValueError as exc:
+        raise HTTPException(400, f"Bad selection: {exc}")
+
+
+def _slug(spec: Spec) -> str:
+    base = "_".join(spec.products[:3]) if spec.products else "all_products"
+    if len(spec.products) > 3:
+        base += f"_plus{len(spec.products) - 3}"
+    return "".join(ch if ch.isalnum() else "_" for ch in base)[:60] + f"_{spec.view}"
+
+
+@app.post("/export/contacts.csv")
+def export_contacts(spec: str = Form("{}")):
+    s = _read_spec(spec)
+    session = SessionLocal()
+    try:
+        snap = data.snapshot(session)
+        customers = {r["uuid"]: r for r in _spec_customers(snap, s)}
+        rows = data.contacts_for(session, snap, list(customers), s.active_only, s.role,
+                                 s.contact_q, contact_ids=s.contact_ids)
+        products = ", ".join(s.products)
+        return _csv_response(
+            ["name", "email", "phone", "mobile_phone", "title", "healthie_user_active",
+             "user_type", "org_owner", "org_admin", "account", "customer", "customer_status",
+             "products_filter", "customer_products", "customer_product_mrr_usd",
+             "customer_total_mrr_usd", "sfdc_contact_id", "sfdc_account_id", "contact_url"],
+            ([c["name"], c["email"], c["phone"], c["mobile"], c["title"], c["active"],
+              c["user_type"], c["owner"], c["admin"], c["account"], c["customer"],
+              c["customer_status"], products,
+              "; ".join(p["product"] + ("" if p["current"] else " (former)")
+                        for p in customers[c["customer_uuid"]]["products"]),
+              customers[c["customer_uuid"]]["product_mrr"] / 100,
+              customers[c["customer_uuid"]]["mrr"] / 100,
+              c["id"], c["account_id"],
+              f"{LIGHTNING_BASE}/lightning/r/Contact/{c['id']}/view"] for c in rows),
+            f"contacts_{_slug(s)}_{date.today().isoformat()}.csv")
+    finally:
+        session.close()
+
+
+@app.post("/export/customers.csv")
+def export_customers(spec: str = Form("{}")):
+    s = _read_spec(spec)
+    session = SessionLocal()
+    try:
+        rows = _spec_customers(data.snapshot(session), s)
+        return _csv_response(
+            ["customer", "email", "status", "products", "product_status", "product_mrr_usd",
+             "seats", "total_mrr_usd", "since", "ended", "sfdc_account", "owner", "health",
+             "active_users", "contacts", "contract_value_usd", "contract_end",
+             "chartmogul_uuid", "sfdc_account_id"],
+            ([r["name"], r["email"], r["status"],
+              "; ".join(p["product"] + ("" if p["current"] else " (former)")
+                        for p in r["products"]),
+              "current" if r["current"] else "former", r["product_mrr"] / 100, r["seats"],
+              r["mrr"] / 100, r["since"], r["ended"],
+              *((r["account"]["name"], r["account"]["owner"], r["account"]["health"],
+                 r["account"]["active_users"], r["account"]["contacts"],
+                 r["account"]["contract_value"], r["account"]["contract_end"])
+                if r["account"] else ("",) * 7),
+              r["uuid"], r["account"]["id"] if r["account"] else ""] for r in rows),
+            f"customers_{_slug(s)}_{date.today().isoformat()}.csv")
+    finally:
+        session.close()
+
+
+# ---------------------------------------------------------------- account API
 
 @app.get("/api/account/{sfdc_account_id}")
 def api_account(sfdc_account_id: str):
@@ -452,7 +412,8 @@ def api_account(sfdc_account_id: str):
             "customers": [{
                 "cm_uuid": cu.cm_uuid, "name": cu.name, "status": cu.status,
                 "mrr_cents": cu.mrr_cents,
-                "products": [{"plan": s.plan_name, "quantity": s.quantity,
+                "products": [{"plan": s.plan_name, "product": s.product,
+                              "current": s.is_current, "quantity": s.quantity,
                               "mrr_cents": s.mrr_cents, "cycle": s.billing_cycle}
                              for s in cu.subscriptions],
             } for cu in acct.customers],

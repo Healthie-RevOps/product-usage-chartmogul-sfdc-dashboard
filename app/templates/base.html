@@ -3,90 +3,38 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{% block title %}Products x Accounts{% endblock %} — Healthie</title>
+<title>{% block title %}Product Explorer{% endblock %} · Healthie</title>
+<link rel="icon" href="/static/healthie-mark.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Spline+Sans:wght@400;500;600&display=swap" rel="stylesheet">
-<style>
-:root{
-  --paper:#f6f7f5; --ink:#17201c; --muted:#5c6862; --line:#dde2dd;
-  --green:#14684f; --green-soft:#e3efe9; --amber:#b4690e; --amber-soft:#f7ecda;
-  --white:#fff;
-}
-*{box-sizing:border-box;margin:0}
-body{background:var(--paper);color:var(--ink);
-  font:14px/1.5 "Spline Sans",system-ui,sans-serif;
-  font-feature-settings:"tnum" 1;}
-a{color:var(--green);text-decoration:none}
-a:hover{text-decoration:underline}
-a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{
-  outline:2px solid var(--green);outline-offset:2px}
-.wrap{max-width:1240px;margin:0 auto;padding:28px 24px 64px}
-header.site{display:flex;align-items:baseline;gap:14px;border-bottom:2px solid var(--ink);
-  padding-bottom:14px;margin-bottom:0}
-header.site h1{font-size:19px;font-weight:600;letter-spacing:-.01em}
-header.site .sub{color:var(--muted);font-size:13px}
-header.site .run{margin-left:auto;color:var(--muted);font-size:12.5px}
-header.site .who{margin-left:auto;color:var(--muted);font-size:12.5px;white-space:nowrap}
-header.site .run + .who{margin-left:14px}
-header.site .who button{font:inherit;color:var(--green);background:none;border:0;padding:0;
-  cursor:pointer}
-header.site .who button:hover{text-decoration:underline}
-.figures{display:flex;border-bottom:1px solid var(--line)}
-.figures div{padding:16px 28px 16px 0;margin-right:28px;border-right:1px solid var(--line)}
-.figures div:last-child{border-right:0}
-.figures b{display:block;font-size:24px;font-weight:600;letter-spacing:-.02em}
-.figures span{color:var(--muted);font-size:12.5px}
-.figures .warn b{color:var(--amber)}
-form.filters{display:flex;gap:10px;align-items:center;padding:16px 0;flex-wrap:wrap}
-form.filters input,form.filters select{
-  font:inherit;padding:7px 10px;border:1px solid var(--line);border-radius:4px;
-  background:var(--white);color:var(--ink)}
-form.filters input[type=search]{width:260px}
-form.filters button{font:inherit;font-weight:500;padding:7px 16px;border:0;border-radius:4px;
-  background:var(--green);color:#fff;cursor:pointer}
-table{width:100%;border-collapse:collapse;background:var(--white);
-  border:1px solid var(--line)}
-th{position:sticky;top:0;background:var(--white);text-align:left;font-size:12px;
-  font-weight:600;color:var(--muted);padding:10px 12px;border-bottom:2px solid var(--ink)}
-td{padding:9px 12px;border-bottom:1px solid var(--line);vertical-align:top}
-tr:hover td{background:var(--green-soft)}
-td.num,th.num{text-align:right}
-.chip{display:inline-block;background:var(--green-soft);color:var(--green);
-  border-radius:3px;padding:1px 7px;font-size:12px;margin:1px 3px 1px 0;white-space:nowrap}
-.chip.qty{color:var(--muted);background:transparent;border:1px solid var(--line)}
-.flag{display:inline-block;background:var(--amber-soft);color:var(--amber);
-  border-radius:3px;padding:1px 7px;font-size:12px;font-weight:500}
-.status{font-size:12px;color:var(--muted)}
-.empty{padding:48px;text-align:center;color:var(--muted);background:var(--white);
-  border:1px solid var(--line)}
-h2{font-size:16px;font-weight:600;margin:26px 0 10px}
-.back{font-size:13px}
-.note{color:var(--muted);font-size:12.5px;margin:8px 0}
-.btn{display:inline-block;font-weight:500;padding:6px 14px;border-radius:4px;
-  background:var(--green);color:#fff;font-size:13px}
-.btn:hover{text-decoration:none;opacity:.9}
-@media (max-width:760px){
-  .figures{flex-wrap:wrap}
-  .wrap{padding:16px 12px 48px}
-  form.filters input[type=search]{width:100%}
-}
-</style>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/app.css?v=3">
 </head>
 <body>
-<div class="wrap">
-<header class="site">
-  <h1><a href="/" style="color:inherit">Products × Accounts</a></h1>
-  <nav class="sub"><a href="/products">Products</a> · <a href="/">Customers</a></nav>
-  <span class="sub">ChartMogul joined to Salesforce, refreshed nightly</span>
-  {% block run %}{% endblock %}
-  {% set signed_in = request.session.get("user") %}
-  {% if signed_in %}
-  <form method="post" action="/logout" class="who">
-    <span>{{ signed_in.email }}</span> <button type="submit">Sign out</button>
-  </form>
-  {% endif %}
+<header class="topbar">
+  <a class="brand" href="/">
+    <img src="/static/healthie-mark.png" alt="" width="28" height="28">
+    <span>Product Explorer</span>
+  </a>
+  <nav class="tabs" aria-label="Sections">
+    <a class="tab {% block nav_explorer %}{% endblock %}" href="/">Explorer</a>
+  </nav>
+  <div class="topbar-right">
+    {% if last_run %}
+    <span title="ChartMogul + Salesforce sync, nightly at 09:00 UTC">
+      <i class="sync-dot {% if last_run.status != 'success' %}bad{% endif %}"></i>Synced {{ last_run.started_at.strftime("%b %d, %H:%M UTC") }}{% if last_run.status != 'success' %} · {{ last_run.status }}{% endif %}
+    </span>
+    {% endif %}
+    {% if user %}<span title="{{ user.email }}">{{ user.name }}</span>{% endif %}
+    {% if user and not insecure %}
+    <form method="post" action="/logout"><button class="btn ghost small" type="submit">Sign out</button></form>
+    {% endif %}
+  </div>
 </header>
+{% if insecure %}<div class="banner warn">Running with no access control (ALLOW_INSECURE_NO_AUTH=1). Local development only.</div>{% endif %}
+<main class="page">
 {% block content %}{% endblock %}
-</div>
+</main>
+<script src="/static/charts.js?v=3"></script>
+{% block scripts %}{% endblock %}
 </body>
 </html>

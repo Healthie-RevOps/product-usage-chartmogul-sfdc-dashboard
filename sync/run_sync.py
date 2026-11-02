@@ -20,13 +20,13 @@ import logging
 import os
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from dateutil import parser as dtparse
 
 from app.db import (
-    Customer, SfdcAccount, SfdcContact, SfdcContract, Subscription, SyncRun, init_db,
-    session_scope,
+    Activity, Customer, ProductMrr, SfdcAccount, SfdcContact, SfdcContract, Subscription,
+    SyncRun, init_db, session_scope,
 )
 from sync import chartmogul as cm
 from sync import sfdc
@@ -55,7 +55,8 @@ def _d(value):
 
 
 def _clear(session):
-    for model in (SfdcContract, SfdcContact, Subscription, Customer, SfdcAccount):
+    for model in (SfdcContract, SfdcContact, Activity, Subscription, Customer, SfdcAccount,
+                  ProductMrr):
         session.query(model).delete()
     session.flush()
 
@@ -72,9 +73,10 @@ def _wanted(product: str | None) -> bool:
     return not PRODUCT_FILTER or (product or "").lower() in PRODUCT_FILTER
 
 
-def sync_chartmogul(session) -> tuple[int, int]:
+def sync_chartmogul(session, plans: list[dict]) -> tuple[int, int, int]:
+    plan_names = {p["external_id"]: p["name"] for p in plans if p.get("external_id")}
     if PRODUCT_FILTER:
-        families = {cm.product_family(p.get("name")) for p in cm.iter_plans()}
+        families = {cm.product_family(p.get("name")) for p in plans}
         unknown = sorted(p for p in PRODUCT_FILTER
                          if p not in {(f or "").lower() for f in families})
         if unknown:
@@ -85,9 +87,9 @@ def sync_chartmogul(session) -> tuple[int, int]:
     log.info("Listed %d ChartMogul customers with status %s", len(raws), CUSTOMER_STATUSES)
 
     by_uuid = {r["uuid"]: r for r in raws}
-    n_cust = n_sub = 0
+    n_cust = n_sub = n_act = 0
     t0 = time.monotonic()
-    for i, (uuid, subs) in enumerate(cm.map_subscriptions(list(by_uuid)), 1):
+    for i, (uuid, subs, acts) in enumerate(cm.map_customer_details(list(by_uuid)), 1):
         rows = []
         for sub in subs:
             plan = sub.get("plan") or sub.get("plan_name")
@@ -132,15 +134,59 @@ def sync_chartmogul(session) -> tuple[int, int]:
         n_cust += 1
         n_sub += len(rows)
 
+        for a in acts:
+            plan = plan_names.get(a.get("plan-external-id"))
+            session.add(Activity(
+                customer_uuid=uuid,
+                date=_dt(a.get("date")),
+                type=a.get("type"),
+                mrr_cents=a.get("activity-mrr"),
+                movement_cents=a.get("activity-mrr-movement"),
+                plan_external_id=a.get("plan-external-id"),
+                plan_name=plan,
+                product=cm.product_family(plan),
+                subscription_external_id=a.get("subscription-external-id"),
+                description=a.get("description"),
+            ))
+        n_act += len(acts)
+
         if i % 500 == 0:
             rate = i / (time.monotonic() - t0)
             log.info("ChartMogul progress: %d/%d customers (%.0f/s, ~%.0f min left), "
-                     "%d subscriptions", i, len(by_uuid), rate,
-                     (len(by_uuid) - i) / rate / 60, n_sub)
+                     "%d subscriptions, %d activities", i, len(by_uuid), rate,
+                     (len(by_uuid) - i) / rate / 60, n_sub, n_act)
             session.flush()
 
-    log.info("Kept %d customers, %d subscriptions", n_cust, n_sub)
-    return n_cust, n_sub
+    log.info("Kept %d customers, %d subscriptions, %d activities", n_cust, n_sub, n_act)
+    return n_cust, n_sub, n_act
+
+
+PRODUCT_MRR_START = os.environ.get("CM_HISTORY_START", "2016-01-01")
+
+
+def sync_product_mrr(session, plans: list[dict]) -> int:
+    """Monthly MRR per product from ChartMogul's metrics API (filtered to its plans)."""
+    by_product: dict[str, list[str]] = {}
+    for p in plans:
+        product = cm.product_family(p.get("name"))
+        if product and _wanted(product):
+            by_product.setdefault(product, []).append(p["uuid"])
+    end = date.today().isoformat()
+    n = 0
+    for product, uuids in sorted(by_product.items()):
+        series = cm.fetch_product_mrr(uuids, PRODUCT_MRR_START, end)
+        if not any(v["mrr"] for v in series.values()):
+            continue  # never had revenue
+        for day, v in series.items():
+            session.add(ProductMrr(
+                product=product, month=_d(day), mrr_cents=v["mrr"],
+                new_biz_cents=v["mrr-new-business"], expansion_cents=v["mrr-expansion"],
+                contraction_cents=v["mrr-contraction"], churn_cents=v["mrr-churn"],
+                reactivation_cents=v["mrr-reactivation"]))
+            n += 1
+    session.flush()
+    log.info("Product MRR history: %d products, %d monthly rows", len(by_product), n)
+    return n
 
 
 def sync_sfdc_accounts(session) -> int:
@@ -214,7 +260,10 @@ def main():
     try:
         with session_scope() as session:
             _clear(session)
-            n_cust, n_sub = sync_chartmogul(session)
+            plans = list(cm.iter_plans())
+            log.info("Listed %d ChartMogul plans", len(plans))
+            n_cust, n_sub, _ = sync_chartmogul(session, plans)
+            sync_product_mrr(session, plans)
             n_acct = sync_sfdc_accounts(session)
             n_match, n_unmatch = match(session)
             session.flush()

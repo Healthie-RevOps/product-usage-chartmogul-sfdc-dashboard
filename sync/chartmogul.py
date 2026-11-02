@@ -110,11 +110,42 @@ def fetch_subscriptions(customer_uuid: str) -> list[dict]:
     return list(_paginate(f"/customers/{customer_uuid}/subscriptions", "entries"))
 
 
-def map_subscriptions(customer_uuids, workers: int = WORKERS):
-    """Yield (customer_uuid, subscriptions) for each customer, fetched concurrently.
+def fetch_activities(customer_uuid: str) -> list[dict]:
+    """MRR movements for one customer (new_biz, expansion, contraction, churn, ...)."""
+    return list(_paginate(f"/customers/{customer_uuid}/activities", "entries"))
+
+
+def fetch_customer_detail(customer_uuid: str) -> tuple[list[dict], list[dict]]:
+    return fetch_subscriptions(customer_uuid), fetch_activities(customer_uuid)
+
+
+def map_customer_details(customer_uuids, workers: int = WORKERS):
+    """Yield (customer_uuid, subscriptions, activities) per customer, fetched concurrently.
     Results arrive in input order; HTTP happens in threads, DB writes stay with the caller."""
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        yield from zip(customer_uuids, pool.map(fetch_subscriptions, customer_uuids))
+        for uuid, (subs, acts) in zip(customer_uuids,
+                                      pool.map(fetch_customer_detail, customer_uuids)):
+            yield uuid, subs, acts
+
+
+PLANS_PER_METRICS_CALL = 40  # 200 plan UUIDs in one query string -> HTTP 414
+
+
+def fetch_product_mrr(plan_uuids: list[str], start: str, end: str) -> dict[str, dict]:
+    """Monthly MRR (+ movement breakdown) for a set of plans, keyed by ISO date.
+    Plans are queried in batches and summed; MRR is additive across disjoint plans."""
+    keys = ("mrr", "mrr-new-business", "mrr-expansion", "mrr-contraction", "mrr-churn",
+            "mrr-reactivation")
+    out: dict[str, dict] = {}
+    for i in range(0, len(plan_uuids), PLANS_PER_METRICS_CALL):
+        batch = plan_uuids[i:i + PLANS_PER_METRICS_CALL]
+        data = _get("/metrics/mrr", {"start-date": start, "end-date": end,
+                                     "interval": "month", "plans": ",".join(batch)})
+        for e in data.get("entries", []):
+            row = out.setdefault(e["date"], dict.fromkeys(keys, 0))
+            for k in keys:
+                row[k] += e.get(k) or 0
+    return out
 
 
 def product_family(plan_name: str | None) -> str | None:

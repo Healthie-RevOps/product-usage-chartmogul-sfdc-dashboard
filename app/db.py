@@ -40,6 +40,8 @@ class Customer(Base):
 
     subscriptions = relationship("Subscription", back_populates="customer",
                                  cascade="all, delete-orphan")
+    activities = relationship("Activity", back_populates="customer",
+                              cascade="all, delete-orphan", order_by="Activity.date")
     sfdc_account = relationship("SfdcAccount", back_populates="customers")
 
 
@@ -61,6 +63,43 @@ class Subscription(Base):
     end_date = Column(DateTime)
 
     customer = relationship("Customer", back_populates="subscriptions")
+
+
+class Activity(Base):
+    """ChartMogul MRR movement for one customer (new_biz / expansion / contraction /
+    churn / reactivation). `mrr_cents` is the customer's total MRR *after* the event,
+    so the series is the customer's revenue history. A plan switch is one net movement
+    on the new plan, so don't sum movements by product; use ProductMrr for that."""
+    __tablename__ = "activities"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    customer_uuid = Column(String, ForeignKey("customers.cm_uuid"), index=True)
+    date = Column(DateTime, index=True)
+    type = Column(String)
+    mrr_cents = Column(BigInteger)
+    movement_cents = Column(BigInteger)
+    plan_external_id = Column(String)
+    plan_name = Column(String)
+    product = Column(String, index=True)
+    subscription_external_id = Column(String)
+    description = Column(Text)
+
+    customer = relationship("Customer", back_populates="activities")
+
+
+class ProductMrr(Base):
+    """Monthly MRR per product, from ChartMogul's metrics API filtered to the product's
+    plans (ChartMogul-computed, so plan switches are attributed correctly)."""
+    __tablename__ = "product_mrr"
+
+    product = Column(String, primary_key=True)
+    month = Column(Date, primary_key=True)
+    mrr_cents = Column(BigInteger, default=0)
+    new_biz_cents = Column(BigInteger, default=0)
+    expansion_cents = Column(BigInteger, default=0)
+    contraction_cents = Column(BigInteger, default=0)
+    churn_cents = Column(BigInteger, default=0)
+    reactivation_cents = Column(BigInteger, default=0)
 
 
 class SfdcAccount(Base):

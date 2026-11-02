@@ -1,0 +1,133 @@
+{% extends "base.html" %}
+{% block title %}Explorer{% endblock %}
+{% block nav_explorer %}active{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <h1>Product Explorer</h1>
+  <span class="sub">Pick products to see who holds them, what they pay, how that changed, and who to contact.</span>
+</div>
+
+<div class="filters" role="search">
+  <div class="picker" id="picker">
+    <button class="btn primary" id="picker-btn" aria-haspopup="true" aria-expanded="false">Products ▾</button>
+    <div class="picker-panel" id="picker-panel" hidden>
+      <input type="search" id="picker-search" placeholder="Search {{ products|length }} products…" autocomplete="off">
+      <div class="picker-list" id="picker-list" role="listbox" aria-multiselectable="true"></div>
+      <div class="picker-foot">
+        <span>Sorted by current MRR · customers now / former</span>
+        <button class="linklike" id="picker-clear">Clear all</button>
+      </div>
+    </div>
+  </div>
+  <div class="chips" id="chips"></div>
+  <div class="seg" role="group" aria-label="Customer status for the selected products" id="view-seg">
+    <button data-view="current" aria-pressed="true">Current</button>
+    <button data-view="former" aria-pressed="false">Former</button>
+    <button data-view="all" aria-pressed="false">All</button>
+  </div>
+  <select id="match" aria-label="Salesforce match">
+    <option value="all">Matched + unmatched</option>
+    <option value="matched">Matched to Salesforce</option>
+    <option value="unmatched">Not matched</option>
+  </select>
+  <input type="search" id="q" placeholder="Search customers or accounts…" autocomplete="off">
+  <select id="range" aria-label="Chart date range">
+    <option value="all">Charts: all time</option>
+    <option value="36">Charts: last 3 years</option>
+    <option value="12">Charts: last 12 months</option>
+  </select>
+</div>
+
+<div class="kpis" id="kpis"></div>
+
+<div class="grid-2" id="charts">
+  <section class="card">
+    <div class="card-head"><h2 id="mrr-title">MRR over time</h2><span class="spacer"></span>
+      <button class="linklike" data-table-toggle="mrr">View as table</button></div>
+    <div id="mrr-legend"></div>
+    <div id="mrr-chart"></div>
+    <div id="mrr-table" hidden></div>
+    <div class="note-line">ChartMogul MRR for the selected products' plans, month end.</div>
+  </section>
+  <section class="card">
+    <div class="card-head"><h2 id="cust-title">Customers over time</h2><span class="spacer"></span>
+      <button class="linklike" data-table-toggle="cust">View as table</button></div>
+    <div id="cust-chart"></div>
+    <div id="cust-table" hidden></div>
+    <div class="note-line">Customers holding at least one selected product at month end.</div>
+  </section>
+</div>
+<div style="height:16px"></div>
+
+<section class="card" id="customers-card">
+  <div class="card-head">
+    <h2>Customers <span class="count" id="cust-count">0</span></h2>
+    <span class="spacer"></span>
+    <button class="btn small" id="export-customers" title="Selected customers, or all matching if none selected">⇩ Export customers CSV</button>
+  </div>
+  <div class="select-all-note" id="select-all-note" hidden></div>
+  <div class="table-wrap" id="cust-wrap">
+    <table class="data" id="cust-table-el">
+      <thead><tr>
+        <th class="check"><input type="checkbox" id="check-all" aria-label="Select all shown customers"></th>
+        <th class="sortable" data-sort="name">Customer</th>
+        <th>Products</th>
+        <th class="sortable num" data-sort="product_mrr">Product MRR</th>
+        <th class="sortable num" data-sort="mrr">Total MRR</th>
+        <th class="sortable" data-sort="since">Since</th>
+        <th class="sortable" data-sort="ended" id="th-ended">Ended</th>
+        <th class="sortable num" data-sort="contract_value">Contract value</th>
+        <th class="sortable" data-sort="contract_end">Contract end</th>
+        <th class="sortable num" data-sort="active_users">Active users</th>
+        <th>Health</th>
+        <th class="sortable" data-sort="owner">Owner</th>
+      </tr></thead>
+      <tbody id="cust-body"></tbody>
+    </table>
+  </div>
+  <div class="note-line" id="cust-note"></div>
+</section>
+
+<section class="card" id="contacts-card">
+  <div class="card-head">
+    <h2>Contacts <span class="count" id="contact-count">0</span></h2>
+    <div class="seg" role="group" aria-label="Which contacts" id="active-seg">
+      <button data-active="1" aria-pressed="true">Active Healthie users</button>
+      <button data-active="0" aria-pressed="false">All contacts</button>
+    </div>
+    <select id="role" aria-label="Role">
+      <option value="all">Any role</option>
+      <option value="admins">Org owners & admins</option>
+    </select>
+    <input type="search" id="contact-q" placeholder="Search name, email, title…" autocomplete="off">
+    <span class="spacer"></span>
+    <button class="btn small" id="export-contacts-selected" disabled>⇩ Export selected</button>
+    <button class="btn small primary" id="export-contacts-all">⇩ Export all</button>
+  </div>
+  <div class="note-line" id="contact-scope" style="padding:0 0 8px"></div>
+  <div class="table-wrap">
+    <table class="data">
+      <thead><tr>
+        <th class="check"><input type="checkbox" id="check-all-contacts" aria-label="Select all shown contacts"></th>
+        <th>Name</th><th>Email</th><th>Phone</th><th>Title</th><th>Role</th><th>Customer</th>
+      </tr></thead>
+      <tbody id="contact-body"></tbody>
+    </table>
+  </div>
+  <div class="note-line" id="contact-note"></div>
+</section>
+
+<div class="selbar" id="selbar" hidden>
+  <span id="selbar-text"></span>
+  <button class="btn small" id="selbar-clear">Clear</button>
+  <button class="btn small" id="selbar-export-customers">⇩ Customers CSV</button>
+  <button class="btn small primary" id="selbar-export-contacts">⇩ Their contacts CSV</button>
+</div>
+
+<form id="export-form" method="post" hidden><input type="hidden" name="spec" id="export-spec"></form>
+<script id="products-data" type="application/json">{{ products|tojson }}</script>
+<script>window.LIGHTNING_BASE = {{ lightning_base|tojson }};</script>
+{% endblock %}
+
+{% block scripts %}<script src="/static/explorer.js?v=3"></script>{% endblock %}
