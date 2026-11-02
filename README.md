@@ -7,8 +7,9 @@ they're contracted for, and who the active users are (with contact info).**
 
 ## Status (2026-11-02)
 
-**Not deployed yet. There is no live URL.** No Railway project exists for this repo.
-The code and smoke tests pass locally; the sync has not run against real data.
+Railway project `product-usage-dashboard` (Healthie RevOps workspace) exists with Postgres,
+`web` and `sync` services. `web` is deployed behind Basic auth. **`sync` is not deployed**
+because it is waiting on SFDC + ChartMogul credentials, so the dashboard is empty until then.
 
 | # | Requirement | Status | Source |
 |---|---|---|---|
@@ -23,8 +24,9 @@ The code and smoke tests pass locally; the sync has not run against real data.
 ### Blockers to a live URL
 1. **SFDC Connected App** (client-credentials, read-only integration user). Still open with Aaron / Edgar.
 2. **ChartMogul API key**.
-3. **Railway project**: create it, attach Postgres, create `web` + `sync` services, set env vars (see Deploy).
-4. **Set `DASH_USER`/`DASH_PASS`** before sharing. The page exposes customer contact data.
+3. Once 1 and 2 are done, set `CHARTMOGUL_API_KEY`, `SFDC_CLIENT_ID` and `SFDC_CLIENT_SECRET` on `sync`,
+   run `railway up -s sync`, and set its cron schedule in the UI.
+4. `DASH_USER`/`DASH_PASS` are set on `web`. View them with `railway variables -s web`.
 5. **The GitHub repo is public.** No secrets are committed, but consider making it private.
 
 ### Data quality, checked in prod 2026-11-02
@@ -63,12 +65,13 @@ Design decisions (deliberate — don't undo casually):
 
 1. Push this repo to GitHub, create a Railway project from it.
 2. Add a **Postgres** database to the project (`DATABASE_URL` is injected automatically).
-3. Create **two services from the same repo**. `railway.json` only sets the builder.
-   Start commands live in per-service settings, because config-as-code would otherwise
-   force one start command and health check onto both services:
-   - `web`: start `uvicorn app.main:app --host 0.0.0.0 --port $PORT`, healthcheck `/health`.
-   - `sync`: start `python -m sync.run_sync`, cron `0 9 * * *` (09:00 UTC ≈ 4/5am ET,
-     after ChartMogul's own Stripe import settles), restart policy `NEVER`.
+3. Create **two services from the same repo**, named exactly `web` and `sync`.
+   Both use `railway.json` → `python start.py`, which picks its role from
+   `RAILWAY_SERVICE_NAME` (override with `SERVICE_ROLE`):
+   - `web` serves the dashboard. Generate a public domain for it.
+   - `sync` runs once and exits. In the dashboard, set Service → Settings → Cron Schedule
+     to `0 9 * * *` (09:00 UTC ≈ 4/5am ET, after ChartMogul's own Stripe import settles).
+     The CLI's `environment edit --service-config` did not apply this (v4.44), so set it in the UI.
 4. Set env vars on **both** services (see `.env.example`).
 5. Trigger the sync service once manually, then open the web service URL.
 6. Web service → Settings → Networking → generate the public domain. Consider
