@@ -7,6 +7,7 @@ are queried on demand for the customers in view.
 """
 from __future__ import annotations
 
+import re
 import threading
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -30,6 +31,17 @@ PARTNER_PREFIXES = ("non ehr mrr",)
 
 def is_partner(name: str | None) -> bool:
     return (name or "").strip().lower().startswith(PARTNER_PREFIXES)
+
+
+# ~45% of Salesforce account names carry an ID suffix: "Two Chairs | Org Id: 6805",
+# "Hinge Health | 40". Strip it for display; the raw name stays in the account record/CSV.
+_ID_SUFFIX = re.compile(r"\s*(?:\||-|–|—)\s*(?:Org\s*Id\s*:?\s*)?#?\d{1,9}\s*$", re.I)
+
+
+def clean_name(name: str | None) -> str | None:
+    if not name:
+        return name
+    return _ID_SUFFIX.sub("", name).strip() or name
 
 
 @dataclass
@@ -117,7 +129,7 @@ def _build(session, run_id) -> Snapshot:
         s.customers[c.cm_uuid] = {
             # Lead with the Salesforce account (the company); ChartMogul's name is usually
             # the Stripe billing contact (a person). Only ~12% of matched names agree.
-            "uuid": c.cm_uuid, "name": (acct["name"] if acct and acct["name"] else billing),
+            "uuid": c.cm_uuid, "name": (clean_name(acct["name"]) if acct and acct["name"] else billing),
             "billing_name": billing, "partner": c.cm_uuid in s.partners, "email": c.email,
             "status": c.status, "mrr": c.mrr_cents or 0, "currency": c.currency or "USD",
             "account_id": c.sfdc_account_id, "match": c.match_method,
