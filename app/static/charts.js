@@ -100,7 +100,7 @@
 
     el._dispose = onResize(el, width => {
       holder.textContent = '';
-      if (!xs.length) { holder.appendChild(h('div', 'empty', 'No history yet.')); return; }
+      if (!xs.length) { holder.appendChild(h('div', 'empty', opts.emptyText || 'No history yet.')); return; }
       const all = series.flatMap(s => s.values);
       const yMax = Math.max(0, ...all), yMin = Math.min(0, ...all);
       const yt = niceTicks(yMin, yMax, 4);

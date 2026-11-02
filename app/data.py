@@ -22,6 +22,15 @@ from app.db import (
 VIEWS = ("current", "former", "all")
 MATCHES = ("all", "matched", "unmatched")
 
+# ChartMogul "customers" that are really revenue buckets (partner / payments income booked
+# against a placeholder plan), e.g. "Non EHR MRR: Payment Processing", "Non EHR MRR: ZocDoc".
+# Hidden from the explorer by default; the toggle brings them back.
+PARTNER_PREFIXES = ("non ehr mrr",)
+
+
+def is_partner(name: str | None) -> bool:
+    return (name or "").strip().lower().startswith(PARTNER_PREFIXES)
+
 
 @dataclass
 class Sub:
@@ -44,6 +53,7 @@ class Snapshot:
     subs_by_product: dict[str, list[Sub]] = field(default_factory=lambda: defaultdict(list))
     customers_by_account: dict[str, list[str]] = field(default_factory=lambda: defaultdict(list))
     products: list[dict] = field(default_factory=list)
+    partners: set[str] = field(default_factory=set)
 
 
 _lock = threading.Lock()
@@ -100,8 +110,15 @@ def _build(session, run_id) -> Snapshot:
         }
 
     for c in session.query(Customer):
+        billing = c.name or c.email or c.cm_uuid
+        acct = s.accounts.get(c.sfdc_account_id) if c.sfdc_account_id else None
+        if is_partner(billing):
+            s.partners.add(c.cm_uuid)
         s.customers[c.cm_uuid] = {
-            "uuid": c.cm_uuid, "name": c.name or c.email or c.cm_uuid, "email": c.email,
+            # Lead with the Salesforce account (the company); ChartMogul's name is usually
+            # the Stripe billing contact (a person). Only ~12% of matched names agree.
+            "uuid": c.cm_uuid, "name": (acct["name"] if acct and acct["name"] else billing),
+            "billing_name": billing, "partner": c.cm_uuid in s.partners, "email": c.email,
             "status": c.status, "mrr": c.mrr_cents or 0, "currency": c.currency or "USD",
             "account_id": c.sfdc_account_id, "match": c.match_method,
             "since": c.customer_since.date().isoformat() if c.customer_since else None,
@@ -124,10 +141,14 @@ def _build(session, run_id) -> Snapshot:
         holders: dict[str, bool] = {}
         mrr = seats = 0
         for sub in subs:
+            if sub.customer_uuid in s.partners:
+                continue
             holders[sub.customer_uuid] = holders.get(sub.customer_uuid, False) or sub.current
             if sub.current:
                 mrr += sub.mrr
                 seats += sub.qty
+        if not holders:
+            continue  # only ever held by partner-revenue buckets
         current = sum(1 for v in holders.values() if v)
         s.products.append({"product": product, "current": current,
                            "former": len(holders) - current, "mrr_cents": mrr, "seats": seats})
@@ -138,7 +159,7 @@ def _build(session, run_id) -> Snapshot:
 # ------------------------------------------------------------------ explorer rows
 
 def customer_rows(snap: Snapshot, products: list[str], view: str = "current",
-                  match: str = "all", q: str = "") -> list[dict]:
+                  match: str = "all", q: str = "", include_partner: bool = False) -> list[dict]:
     """Customers matching the filters, sorted by product MRR then total MRR.
 
     With products selected, a customer is in scope if they ever held one of them;
@@ -157,7 +178,7 @@ def customer_rows(snap: Snapshot, products: list[str], view: str = "current",
     rows = []
     for uuid in uuids:
         c = snap.customers.get(uuid)
-        if not c:
+        if not c or (c["partner"] and not include_partner):
             continue
         subs = [x for x in snap.subs_by_customer.get(uuid, [])
                 if not wanted or x.product in wanted]
@@ -170,7 +191,7 @@ def customer_rows(snap: Snapshot, products: list[str], view: str = "current",
         if match == "unmatched" and acct:
             continue
         if q and q not in (c["name"] or "").lower() and q not in (c["email"] or "").lower() \
-                and not (acct and q in (acct["name"] or "").lower()):
+                and q not in (c["billing_name"] or "").lower():
             continue
         held: dict[str, bool] = {}
         for x in subs:
@@ -179,7 +200,8 @@ def customer_rows(snap: Snapshot, products: list[str], view: str = "current",
         starts = [x.start for x in subs if x.start]
         ends = [x.end for x in subs if x.end and not x.current]
         rows.append({
-            "uuid": uuid, "name": c["name"], "email": c["email"], "status": c["status"],
+            "uuid": uuid, "name": c["name"], "billing_name": c["billing_name"],
+            "partner": c["partner"], "email": c["email"], "status": c["status"],
             "current": current,
             "products": [{"product": p, "current": cur} for p, cur in
                          sorted(held.items(), key=lambda kv: (not kv[1], kv[0]))],
@@ -197,21 +219,29 @@ def customer_rows(snap: Snapshot, products: list[str], view: str = "current",
     return rows
 
 
-def totals(snap: Snapshot, rows: list[dict], products: list[str]) -> dict:
+def totals(snap: Snapshot, rows: list[dict], products: list[str],
+           include_partner: bool = False) -> dict:
     accounts = {r["account"]["id"]: r["account"] for r in rows if r["account"]}
     wanted = set(products)
+    skip = set() if include_partner else snap.partners
     if wanted:
         holders: dict[str, bool] = {}
         for p in wanted:
             for sub in snap.subs_by_product.get(p, []):
+                if sub.customer_uuid in skip:
+                    continue
                 holders[sub.customer_uuid] = holders.get(sub.customer_uuid, False) or sub.current
         current = sum(1 for v in holders.values() if v)
         former = len(holders) - current
     else:
-        current = sum(1 for u in snap.customers
-                      if any(x.current for x in snap.subs_by_customer.get(u, [])))
-        former = len(snap.customers) - current
+        pool = [u for u in snap.customers if u not in skip]
+        current = sum(1 for u in pool if any(x.current for x in snap.subs_by_customer.get(u, [])))
+        former = len(pool) - current
+    partner_in_scope = sum(
+        1 for u in snap.partners
+        if not wanted or any(x.product in wanted for x in snap.subs_by_customer.get(u, [])))
     return {
+        "partners": partner_in_scope, "partners_included": include_partner,
         "shown": len(rows), "current": current, "former": former,
         "product_mrr": sum(r["product_mrr"] for r in rows),
         "contract_value": sum(a["contract_value"] or 0 for a in accounts.values()),
@@ -260,7 +290,8 @@ def _active_counts(months: list[date], intervals: dict[str, list[tuple]]) -> lis
     return out
 
 
-def product_trend(session, snap: Snapshot, products: list[str]) -> dict:
+def product_trend(session, snap: Snapshot, products: list[str],
+                  include_partner: bool = False) -> dict:
     """Monthly MRR (ChartMogul metrics, per product) and customers holding the selected
     products at each month end (from subscription start/end dates)."""
     q = session.query(ProductMrr.product, ProductMrr.month, ProductMrr.mrr_cents,
@@ -278,20 +309,25 @@ def product_trend(session, snap: Snapshot, products: list[str]) -> dict:
 
     months = sorted({m for series in per_product.values() for m in series})
     total = [sum(per_product[p].get(m, 0) for p in per_product) for m in months]
+    if months:
+        lead = next((i for i, t in enumerate(total) if t), len(months))
+        months, total = months[lead:], total[lead:]
 
     # customers holding any selected product at each month end
+    skip = set() if include_partner else snap.partners
     subs = ([s for p in products for s in snap.subs_by_product.get(p, [])] if products
             else [s for lst in snap.subs_by_customer.values() for s in lst])
+    subs = [s for s in subs if s.customer_uuid not in skip]
     intervals: dict[str, list[tuple]] = defaultdict(list)
     for s in subs:
         if s.start:
             intervals[s.customer_uuid].append((s.start.date(), None if s.current else
                                                (s.end.date() if s.end else s.start.date())))
-    customers = _active_counts(months, intervals)
-    if months:
-        # trim leading months with no revenue and no customers
-        lead = next((i for i, (t, c) in enumerate(zip(total, customers)) if t or c), 0)
-        months, total, customers = months[lead:], total[lead:], customers[lead:]
+    # customers-over-time comes from subscription dates, so it works even before any
+    # revenue history has been synced
+    starts = [iv[0] for ivs in intervals.values() for iv in ivs]
+    cust_months = _month_ends(max(min(starts), date(2016, 1, 1)), date.today()) if starts else []
+    customers = _active_counts(cust_months, intervals)
 
     series = []
     if 1 < len(products) <= 4:
@@ -300,6 +336,7 @@ def product_trend(session, snap: Snapshot, products: list[str]) -> dict:
     return {
         "months": [m.isoformat() for m in months],
         "mrr": total,
+        "customer_months": [m.isoformat() for m in cust_months],
         "customers": customers,
         "series": series,
         "movements": [{"month": m.isoformat(), "new_biz": movements[m][0],

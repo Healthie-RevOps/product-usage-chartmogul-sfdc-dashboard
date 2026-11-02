@@ -221,10 +221,12 @@ class Spec(BaseModel):
     active_only: bool = True
     role: str = "all"                          # all | admins
     contact_q: str = ""
+    include_partner: bool = False             # "Non EHR MRR: ..." revenue buckets
 
 
 def _spec_customers(snap, spec: Spec) -> list[dict]:
-    rows = data.customer_rows(snap, spec.products, spec.view, spec.match, spec.q)
+    rows = data.customer_rows(snap, spec.products, spec.view, spec.match, spec.q,
+                              spec.include_partner)
     if spec.customer_uuids is not None:
         keep = set(spec.customer_uuids)
         rows = [r for r in rows if r["uuid"] in keep]
@@ -247,22 +249,23 @@ def api_products():
 
 @app.get("/api/explore")
 def api_explore(product: list[str] = Query([]), view: str = "current", match: str = "all",
-                q: str = ""):
+                q: str = "", include_partner: bool = False):
     session = SessionLocal()
     try:
         snap = data.snapshot(session)
-        rows = data.customer_rows(snap, product, view, match, q)
-        return JSONResponse({"totals": data.totals(snap, rows, product),
+        rows = data.customer_rows(snap, product, view, match, q, include_partner)
+        return JSONResponse({"totals": data.totals(snap, rows, product, include_partner),
                              "rows": rows[:ROW_LIMIT], "limit": ROW_LIMIT})
     finally:
         session.close()
 
 
 @app.get("/api/trend")
-def api_trend(product: list[str] = Query([])):
+def api_trend(product: list[str] = Query([]), include_partner: bool = False):
     session = SessionLocal()
     try:
-        return JSONResponse(data.product_trend(session, data.snapshot(session), product))
+        return JSONResponse(data.product_trend(session, data.snapshot(session), product,
+                                               include_partner))
     finally:
         session.close()
 
@@ -357,11 +360,11 @@ def export_customers(spec: str = Form("{}")):
     try:
         rows = _spec_customers(data.snapshot(session), s)
         return _csv_response(
-            ["customer", "email", "status", "products", "product_status", "product_mrr_usd",
+            ["customer", "billing_name", "email", "status", "products", "product_status", "product_mrr_usd",
              "seats", "total_mrr_usd", "since", "ended", "sfdc_account", "owner", "health",
              "active_users", "contacts", "contract_value_usd", "contract_end",
              "chartmogul_uuid", "sfdc_account_id"],
-            ([r["name"], r["email"], r["status"],
+            ([r["name"], r["billing_name"], r["email"], r["status"],
               "; ".join(p["product"] + ("" if p["current"] else " (former)")
                         for p in r["products"]),
               "current" if r["current"] else "former", r["product_mrr"] / 100, r["seats"],

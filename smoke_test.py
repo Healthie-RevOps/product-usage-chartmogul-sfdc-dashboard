@@ -95,6 +95,15 @@ with session_scope() as s:
         s.add(Subscription(cm_uuid=f"sub_multi_{i}", customer_uuid=MULTI, plan_name=prod,
                            product=prod, is_current=True, status="active", quantity=2,
                            mrr_cents=15000, start_date=datetime(2025, 1, 15)))
+    # a ChartMogul revenue bucket that is not a real customer
+    s.add(Customer(cm_uuid="cus_partner", name="Non EHR MRR: Payment Processing", status="Active",
+                   mrr_cents=999900, stripe_customer_id="cus_pp", match_method="unmatched"))
+    s.add(Subscription(cm_uuid="sub_partner", customer_uuid="cus_partner", plan_name="Baraka Wellness",
+                       product="Baraka Wellness", is_current=True, status="active", quantity=1,
+                       mrr_cents=999900, start_date=datetime(2024, 2, 1)))
+    s.add(Subscription(cm_uuid="sub_partner2", customer_uuid="cus_partner", plan_name="Group Plan - PP",
+                       product="Group Plan", is_current=True, status="active", quantity=1,
+                       mrr_cents=1000, start_date=datetime(2024, 2, 1)))
     for month, mrr in ((date(2023, 12, 31), 0), (date(2024, 1, 31), 200000),
                        (date(2025, 6, 30), 265000), (date(2025, 12, 31), 265000)):
         s.add(ProductMrr(product="Group Plan", month=month, mrr_cents=mrr))
@@ -170,12 +179,17 @@ ex = client.get("/api/explore?product=Nonexistent").json()
 check("unknown product -> empty", ex["rows"], [])
 
 tr = client.get("/api/trend?product=Group+Plan&product=Plus+Plan").json()
-check("trend starts at first month with revenue or customers", tr["months"][0], "2023-12-31")
+check("MRR trend starts at first month with revenue", tr["months"][0], "2024-01-31")
+check("customers trend starts at earliest subscription", tr["customer_months"][0], "2022-01-31")
+cm_idx = {m: i for i, m in enumerate(tr["customer_months"])}
 check("trend total MRR = sum of products", tr["mrr"][-1], 265000 + 265000 // 4)
 check("per-product series for 2 products", [s["product"] for s in tr["series"]], ["Group Plan", "Plus Plan"])
-check("customers over time (Dec 2023: Orphan, Gone)", tr["customers"][0], 2)
-check("customers over time (Jan 2024: Acme, Orphan, Gone)", tr["customers"][1], 3)
-check("customers over time (Dec 2025: Acme, Orphan, Multi)", tr["customers"][-1], 3)
+check("customers over time (Dec 2023: Orphan, Gone)", tr["customers"][cm_idx["2023-12-31"]], 2)
+check("customers over time (Jan 2024: Acme, Orphan, Gone)", tr["customers"][cm_idx["2024-01-31"]], 3)
+check("customers over time (Dec 2025: Acme, Orphan, Multi)", tr["customers"][cm_idx["2025-12-31"]], 3)
+check("partner bucket excluded from customer counts", tr["customers"][-1], 3)
+tr_p = client.get("/api/trend?product=Group+Plan&include_partner=true").json()
+check("partner bucket included on request", tr_p["customers"][-1], 3)
 
 hist = client.get(f"/api/customer/{ACME}/history").json()
 check("history events in date order", [e["type"] for e in hist["events"]], ["new_biz", "expansion", "contraction"])
@@ -186,6 +200,23 @@ check("customer page shows change log", "removed AI Scribe" in page, True)
 check("customer page escapes descriptions", "<b>Group</b>" in page, False)
 check("customer page has contract value", "$60,000" in page, True)
 check("customer page branded", "healthie-mark.png" in page and "Product Explorer" in page, True)
+
+print("\nnon-EHR revenue buckets:")
+check("bucket hidden from product picker", "Baraka Wellness" in prods, False)
+ex = client.get("/api/explore?view=all").json()
+check("bucket hidden from explorer by default", "cus_partner" in [r["uuid"] for r in ex["rows"]], False)
+check("toggle count reported", ex["totals"]["partners"], 1)
+ex = client.get("/api/explore?view=all&include_partner=true").json()
+row = next((r for r in ex["rows"] if r["uuid"] == "cus_partner"), None)
+check("bucket shown with toggle, flagged", bool(row and row["partner"]), True)
+check("Group Plan current count ignores bucket",
+      client.get("/api/explore?product=Group+Plan").json()["totals"]["current"], 2)
+check("Group Plan toggle count",
+      client.get("/api/explore?product=Group+Plan").json()["totals"]["partners"], 1)
+check("Plus Plan has no bucket",
+      client.get("/api/explore?product=Plus+Plan").json()["totals"]["partners"], 0)
+ex = client.get("/api/explore?product=Group+Plan&include_partner=true").json()
+check("toggle adds bucket to Group Plan current", ex["totals"]["current"], 3)
 
 print("\ncontacts + exports:")
 c = client.post("/api/contacts", json={"products": ["Group Plan"], "view": "current"}, headers=FETCH).json()

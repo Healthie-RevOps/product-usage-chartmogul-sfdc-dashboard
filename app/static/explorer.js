@@ -16,6 +16,7 @@
     match: ['all', 'matched', 'unmatched'].includes(url.get('match')) ? url.get('match') : 'all',
     q: url.get('q') || '',
     range: ['all', '36', '12'].includes(url.get('range')) ? url.get('range') : 'all',
+    includePartner: url.get('partner') === '1',
     sort: { key: 'product_mrr', dir: -1 },
     rows: [], totals: null, limit: 2000, trend: null,
     selected: new Set(), allMatching: false,
@@ -49,6 +50,7 @@
     if (state.match !== 'all') p.set('match', state.match);
     if (state.q) p.set('q', state.q);
     if (state.range !== 'all') p.set('range', state.range);
+    if (state.includePartner) p.set('partner', '1');
     const qs = p.toString();
     history.replaceState(null, '', qs ? '?' + qs : location.pathname);
   }
@@ -119,6 +121,7 @@
   $('match').addEventListener('change', e => { state.match = e.target.value; resetSelection(); load(false); });
   $('q').addEventListener('input', debounce(e => { state.q = e.target.value.trim(); resetSelection(); load(false); }, 300));
   $('range').addEventListener('change', e => { state.range = e.target.value; syncUrl(); renderCharts(); });
+  $('include-partner').addEventListener('change', e => { state.includePartner = e.target.checked; resetSelection(); load(true); });
 
   /* ---------------------------------------------------------------- data */
   let seq = 0;
@@ -127,6 +130,7 @@
     const my = ++seq;
     const qs = new URLSearchParams();
     state.products.forEach(p => qs.append('product', p));
+    if (state.includePartner) qs.set('include_partner', 'true');
     const explore = new URLSearchParams(qs); explore.set('view', state.view); explore.set('match', state.match);
     if (state.q) explore.set('q', state.q);
     document.body.classList.add('busy');
@@ -139,6 +143,9 @@
       ]);
       if (my !== seq) return;
       state.rows = ex.rows; state.totals = ex.totals; state.limit = ex.limit; state.trend = tr;
+      const pt = $('partner-toggle');
+      pt.hidden = !ex.totals.partners;
+      $('partner-label').textContent = `Include non-EHR revenue (${fmt.int(ex.totals.partners)})`;
       renderKpis(); renderCharts(); renderTable();
       loadContacts();
     } finally {
@@ -168,16 +175,19 @@
   }
 
   /* ---------------------------------------------------------------- charts */
+  function cutIndex(months) {
+    if (state.range === 'all' || !months.length) return 0;
+    const cut = new Date(); cut.setUTCMonth(cut.getUTCMonth() - Number(state.range));
+    const i = months.findIndex(m => Charts.parseDate(m) >= cut);
+    return i < 0 ? months.length : i;
+  }
   function sliceRange(tr) {
-    if (!tr || !tr.months.length) return { months: [], mrr: [], customers: [], series: [] };
-    let start = 0;
-    if (state.range !== 'all') {
-      const cut = new Date(); cut.setUTCMonth(cut.getUTCMonth() - Number(state.range));
-      start = Math.max(0, tr.months.findIndex(m => Charts.parseDate(m) >= cut));
-    }
+    if (!tr) return { months: [], mrr: [], series: [], customerMonths: [], customers: [] };
+    const a = cutIndex(tr.months), b = cutIndex(tr.customer_months || []);
     return {
-      months: tr.months.slice(start), mrr: tr.mrr.slice(start), customers: tr.customers.slice(start),
-      series: tr.series.map(s => ({ ...s, mrr: s.mrr.slice(start) })),
+      months: tr.months.slice(a), mrr: tr.mrr.slice(a),
+      series: tr.series.map(s => ({ ...s, mrr: s.mrr.slice(a) })),
+      customerMonths: (tr.customer_months || []).slice(b), customers: tr.customers.slice(b),
     };
   }
   const shown = { mrr: false, cust: false };
@@ -198,14 +208,16 @@
       $('mrr-legend').appendChild(h('span', 'muted', 'Total of the selected products (per-product lines show for up to 4).'));
     }
     Charts.line($('mrr-chart'), { dates: tr.months, series: mrrSeries, area: !multi, endLabels: multi,
-      height: 240, ariaLabel: 'MRR by month' });
-    Charts.line($('cust-chart'), { dates: tr.months, series: [{ name: 'Customers', color: ACCENT, values: tr.customers }],
+      height: 240, ariaLabel: 'MRR by month',
+      emptyText: 'Revenue history fills in after the next nightly sync (09:00 UTC).' });
+    Charts.line($('cust-chart'), { dates: tr.customerMonths, series: [{ name: 'Customers', color: ACCENT, values: tr.customers }],
       area: true, height: 240, yFormat: fmt.int, yAxisFormat: fmt.intAxis, ariaLabel: 'Customers by month' });
     const rows = tr.months.map((m, i) => ({ m, i })).reverse();
     Charts.table($('mrr-table'), [{ label: 'Month', value: r => fmt.month(Charts.parseDate(r.m)) },
       ...mrrSeries.map(s => ({ label: s.name, num: true, value: r => fmt.money(s.values[r.i]) }))], rows);
     Charts.table($('cust-table'), [{ label: 'Month', value: r => fmt.month(Charts.parseDate(r.m)) },
-      { label: 'Customers', num: true, value: r => fmt.int(tr.customers[r.i]) }], rows);
+      { label: 'Customers', num: true, value: r => fmt.int(tr.customers[r.i]) }],
+      tr.customerMonths.map((m, i) => ({ m, i })).reverse());
     ['mrr', 'cust'].forEach(k => { $(k + '-table').hidden = !shown[k]; $(k + '-chart').hidden = shown[k]; });
   }
   document.querySelectorAll('[data-table-toggle]').forEach(b => b.addEventListener('click', () => {
@@ -258,9 +270,10 @@
       const a = h('a', 'strong', r.name); a.href = '/customer/' + encodeURIComponent(r.uuid);
       name.appendChild(a);
       const sub = h('div', 'small muted');
+      if (r.partner) sub.appendChild(h('span', 'tag warn', 'non-EHR revenue'));
       if (r.status && r.status !== 'Active') sub.appendChild(h('span', 'tag former', r.status));
-      if (!r.account) sub.appendChild(h('span', 'tag warn', 'not in Salesforce'));
-      else if (r.account.name && r.account.name !== r.name) sub.appendChild(document.createTextNode(r.account.name));
+      if (!r.account && !r.partner) sub.appendChild(h('span', 'tag warn', 'not in Salesforce'));
+      if (r.billing_name && r.billing_name !== r.name) sub.appendChild(document.createTextNode('Billing: ' + r.billing_name));
       name.appendChild(sub);
       tr.appendChild(name);
 
@@ -272,11 +285,11 @@
 
       tr.appendChild(h('td', 'num', fmt.money(r.product_mrr)));
       tr.appendChild(h('td', 'num', fmt.money(r.mrr)));
-      tr.appendChild(h('td', 'small', r.since || '—'));
-      const ended = h('td', 'small', r.ended || '—'); ended.hidden = state.view === 'current'; tr.appendChild(ended);
+      tr.appendChild(h('td', 'small date', r.since || '—'));
+      const ended = h('td', 'small date', r.ended || '—'); ended.hidden = state.view === 'current'; tr.appendChild(ended);
       const ac = r.account;
       tr.appendChild(h('td', 'num', ac && ac.contract_value ? fmt.money(ac.contract_value * 100) : '—'));
-      tr.appendChild(h('td', 'small', ac && ac.contract_end ? ac.contract_end : '—'));
+      tr.appendChild(h('td', 'small date', ac && ac.contract_end ? ac.contract_end : '—'));
       tr.appendChild(h('td', 'num', ac ? fmt.int(ac.active_users) : '—'));
       tr.appendChild(h('td', 'small', ac && ac.health ? ac.health : '—'));
       tr.appendChild(h('td', 'small', ac && ac.owner ? ac.owner : '—'));
@@ -337,7 +350,7 @@
     return Object.assign({
       products: state.products, view: state.view, match: state.match, q: state.q,
       customer_uuids: scopeUuids(), active_only: state.activeOnly, role: state.role,
-      contact_q: state.contactQ,
+      contact_q: state.contactQ, include_partner: state.includePartner,
     }, extra || {});
   }
   let cseq = 0;
@@ -440,6 +453,7 @@
 
   /* ---------------------------------------------------------------- boot */
   $('q').value = state.q; $('match').value = state.match; $('range').value = state.range;
+  $('include-partner').checked = state.includePartner;
   setSeg($('view-seg'), 'view', state.view);
   renderChips();
   load(true);

@@ -161,6 +161,11 @@ table.data td a.strong { font-weight: 700; }
 .tag.warn { background: var(--amber-tint); color: var(--amber); }
 .tag.ok { background: var(--mint-light); color: #0B6B4F; }
 .empty { padding: 40px; text-align: center; color: var(--muted); }
+td.date, th.date { white-space: nowrap; }
+.toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--muted);
+  font-weight: 600; cursor: pointer; background: #fff; border: 1px solid var(--line);
+  border-radius: 999px; padding: 6px 12px; }
+.toggle:has(input:checked) { color: var(--purple-dark); border-color: var(--purple); background: var(--purple-tint); }
 .note-line { color: var(--muted); font-size: 12.5px; padding: 8px 2px 0; }
 
 /* selection bar */

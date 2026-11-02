@@ -32,6 +32,9 @@
     <option value="unmatched">Not matched</option>
   </select>
   <input type="search" id="q" placeholder="Search customers or accounts…" autocomplete="off">
+  <label class="toggle" id="partner-toggle" hidden title="ChartMogul entries like &quot;Non EHR MRR: Payment Processing&quot; are partner / payments revenue booked as customers, not real customers.">
+    <input type="checkbox" id="include-partner"> <span id="partner-label">Include non-EHR revenue</span>
+  </label>
   <select id="range" aria-label="Chart date range">
     <option value="all">Charts: all time</option>
     <option value="36">Charts: last 3 years</option>
@@ -130,4 +133,4 @@
 <script>window.LIGHTNING_BASE = {{ lightning_base|tojson }};</script>
 {% endblock %}
 
-{% block scripts %}<script src="/static/explorer.js?v=4"></script>{% endblock %}
+{% block scripts %}<script src="/static/explorer.js?v=5"></script>{% endblock %}

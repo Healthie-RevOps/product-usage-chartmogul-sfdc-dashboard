@@ -15,6 +15,8 @@
   {% if not acct %}<span class="tag warn">not matched to Salesforce</span>{% endif %}
 </div>
 <div class="facts" style="margin-bottom:14px">
+  {% if c.partner %}<span class="tag warn">non-EHR revenue bucket, not a customer</span>{% endif %}
+  {% if c.billing_name and c.billing_name != c.name %}<span>Billing contact <b>{{ c.billing_name }}</b></span>{% endif %}
   {% if c.email %}<span>Billing email <b>{{ c.email }}</b></span>{% endif %}
   {% if acct %}<span>Salesforce <a href="{{ lightning_base }}/lightning/r/Account/{{ acct.id }}/view" target="_blank" rel="noopener"><b>{{ acct.name }}</b></a></span>
   <span>Owner <b>{{ acct.owner or "—" }}</b></span>{% endif %}
@@ -87,8 +89,8 @@
             {% if not s.current %}<span class="tag former">ended</span>{% endif %}</td>
           <td class="num">{{ s.qty or "—" }}</td>
           <td class="num">{{ s.mrr|money(c.currency) if s.current else "—" }}</td>
-          <td class="small">{{ s.start or "—" }}</td>
-          <td class="small">{{ s.end or ("renews" if s.current else "—") }}</td>
+          <td class="small date">{{ s.start or "—" }}</td>
+          <td class="small date">{{ s.end or ("renews" if s.current else "—") }}</td>
         </tr>
       {% endfor %}
       </tbody>
@@ -107,7 +109,7 @@
         <tr>
           <td><a href="{{ lightning_base }}/lightning/r/Opportunity/{{ k.id }}/view" target="_blank" rel="noopener">{{ k.name }}</a>
             {% if k.opp_type %}<div class="small muted">{{ k.opp_type }}</div>{% endif %}</td>
-          <td class="small">{{ k.close_date or "—" }}</td>
+          <td class="small date">{{ k.close_date or "—" }}</td>
           <td class="num">{{ k.value|dollars }}</td>
           <td class="num">{{ k.year1_acv|dollars }}</td>
           <td class="small">{% if k.contract_start or k.contract_end %}{{ k.contract_start or "?" }} → {{ k.contract_end or "?" }}{% else %}—{% endif %}</td>
@@ -148,4 +150,4 @@
 {% endif %}
 {% endblock %}
 
-{% block scripts %}{% if c %}<script src="/static/customer.js?v=4"></script>{% endif %}{% endblock %}
+{% block scripts %}{% if c %}<script src="/static/customer.js?v=5"></script>{% endif %}{% endblock %}
