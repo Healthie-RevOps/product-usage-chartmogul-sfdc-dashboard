@@ -24,8 +24,8 @@ because it is waiting on SFDC + ChartMogul credentials, so the dashboard is empt
 
 ### Blockers to a live URL
 1. **SFDC Connected App** (client-credentials, read-only integration user). Still open with Aaron / Edgar.
-2. **ChartMogul API key**.
-3. Once 1 and 2 are done, set `CHARTMOGUL_API_KEY`, `SFDC_CLIENT_ID` and `SFDC_CLIENT_SECRET` on `sync`,
+2. ~~ChartMogul API key~~: done. The read-only key from `healthie-bottoms-up-model` is set on `sync` (verified 2026-11-02).
+3. Once 1 is done, set `SFDC_CLIENT_ID` and `SFDC_CLIENT_SECRET` on `sync`,
    run `railway up -s sync`, and set its cron schedule in the UI.
 4. `DASH_USER`/`DASH_PASS` are set on `web`. View them with `railway variables -s web`.
 5. **The GitHub repo is public.** No secrets are committed, but consider making it private.
