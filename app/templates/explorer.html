@@ -64,7 +64,7 @@
   <div class="card-head">
     <h2>Customers <span class="count" id="cust-count">0</span></h2>
     <span class="spacer"></span>
-    <button class="btn small" id="export-customers" title="Selected customers, or all matching if none selected">⇩ Export customers CSV</button>
+    <button class="btn small" id="export-customers" title="Selected customers, or all matching if none selected">↓ Export customers CSV</button>
   </div>
   <div class="select-all-note" id="select-all-note" hidden></div>
   <div class="table-wrap" id="cust-wrap">
@@ -102,8 +102,8 @@
     </select>
     <input type="search" id="contact-q" placeholder="Search name, email, title…" autocomplete="off">
     <span class="spacer"></span>
-    <button class="btn small" id="export-contacts-selected" disabled>⇩ Export selected</button>
-    <button class="btn small primary" id="export-contacts-all">⇩ Export all</button>
+    <button class="btn small" id="export-contacts-selected" disabled>↓ Export selected</button>
+    <button class="btn small primary" id="export-contacts-all">↓ Export all</button>
   </div>
   <div class="note-line" id="contact-scope" style="padding:0 0 8px"></div>
   <div class="table-wrap">
@@ -121,8 +121,8 @@
 <div class="selbar" id="selbar" hidden>
   <span id="selbar-text"></span>
   <button class="btn small" id="selbar-clear">Clear</button>
-  <button class="btn small" id="selbar-export-customers">⇩ Customers CSV</button>
-  <button class="btn small primary" id="selbar-export-contacts">⇩ Their contacts CSV</button>
+  <button class="btn small" id="selbar-export-customers">↓ Customers CSV</button>
+  <button class="btn small primary" id="selbar-export-contacts">↓ Their contacts CSV</button>
 </div>
 
 <form id="export-form" method="post" hidden><input type="hidden" name="spec" id="export-spec"></form>
@@ -130,4 +130,4 @@
 <script>window.LIGHTNING_BASE = {{ lightning_base|tojson }};</script>
 {% endblock %}
 
-{% block scripts %}<script src="/static/explorer.js?v=3"></script>{% endblock %}
+{% block scripts %}<script src="/static/explorer.js?v=4"></script>{% endblock %}

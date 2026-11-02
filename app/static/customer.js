@@ -80,8 +80,8 @@
     [...selected].forEach(id => { if (!rows.some(c => c.id === id)) selected.delete(id); });
     const n = selected.size;
     $('export-selected').disabled = !n;
-    $('export-selected').textContent = n ? `⇩ Export selected (${n})` : '⇩ Export selected';
-    $('export-all').textContent = `⇩ Export ${activeOnly ? 'active users' : 'all contacts'} (${rows.length})`;
+    $('export-selected').textContent = n ? `↓ Export selected (${n})` : '↓ Export selected';
+    $('export-all').textContent = `↓ Export ${activeOnly ? 'active users' : 'all contacts'} (${rows.length})`;
     const all = rows.length && rows.every(c => selected.has(c.id));
     $('check-all').checked = !!all; $('check-all').indeterminate = !all && n > 0;
   }

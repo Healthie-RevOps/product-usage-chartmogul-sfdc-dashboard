@@ -402,13 +402,13 @@
     }
     $('contact-note').textContent = r.total > state.contacts.length
       ? `Showing ${fmt.int(state.contacts.length)} of ${fmt.int(r.total)}. “Export all” includes every one.` : '';
-    $('export-contacts-all').textContent = `⇩ Export all (${fmt.int(r.total)})`;
+    $('export-contacts-all').textContent = `↓ Export all (${fmt.int(r.total)})`;
     contactSelectionChanged();
   }
   function contactSelectionChanged() {
     const n = state.selectedContacts.size;
     const b = $('export-contacts-selected');
-    b.disabled = n === 0; b.textContent = n ? `⇩ Export selected (${fmt.int(n)})` : '⇩ Export selected';
+    b.disabled = n === 0; b.textContent = n ? `↓ Export selected (${fmt.int(n)})` : '↓ Export selected';
     const all = state.contacts.length && state.contacts.every(c => state.selectedContacts.has(c.id));
     $('check-all-contacts').checked = !!all;
     $('check-all-contacts').indeterminate = !all && n > 0;

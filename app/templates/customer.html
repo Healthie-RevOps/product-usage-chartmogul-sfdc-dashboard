@@ -129,8 +129,8 @@
       <button data-active="0" aria-pressed="true">All contacts</button>
     </div>
     <span class="spacer"></span>
-    <button class="btn small" id="export-selected" disabled>⇩ Export selected</button>
-    <button class="btn small primary" id="export-all">⇩ Export contacts CSV</button>
+    <button class="btn small" id="export-selected" disabled>↓ Export selected</button>
+    <button class="btn small primary" id="export-all">↓ Export contacts CSV</button>
   </div>
   {% if contacts %}
   <div class="table-wrap">
@@ -148,4 +148,4 @@
 {% endif %}
 {% endblock %}
 
-{% block scripts %}{% if c %}<script src="/static/customer.js?v=3"></script>{% endif %}{% endblock %}
+{% block scripts %}{% if c %}<script src="/static/customer.js?v=4"></script>{% endif %}{% endblock %}

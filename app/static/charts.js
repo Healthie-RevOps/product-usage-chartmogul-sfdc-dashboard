@@ -105,7 +105,11 @@
       const yMax = Math.max(0, ...all), yMin = Math.min(0, ...all);
       const yt = niceTicks(yMin, yMax, 4);
       const labelW = Math.max(...yt.map(v => yAxisFmt(v).length)) * 6.6 + 10;
-      const endLabels = opts.endLabels && series.length > 1;
+      // direct end labels only when they won't collide; otherwise don't reserve the margin
+      const ihPre = height - 10 - 26;
+      const yPre = v => (v - yt[0]) / (yt[yt.length - 1] - yt[0]) * ihPre;
+      const endYs = series.map(s => yPre(s.values[s.values.length - 1])).sort((a, b) => a - b);
+      const endLabels = opts.endLabels && series.length > 1 && !endYs.some((y, i) => i && y - endYs[i - 1] < 13);
       const m = { t: 10, r: endLabels ? 120 : 14, b: 26, l: labelW };
       const W = width, H = height, iw = W - m.l - m.r, ih = H - m.t - m.b;
       const t0 = xs[0], t1 = xs.length > 1 ? xs[xs.length - 1] : xs[0] + 864e5;
@@ -152,9 +156,7 @@
 
       // direct end labels, only when they don't collide (legend carries identity regardless)
       if (endLabels) {
-        const ends = series.map(s => ({ s, y: Y(s.values[s.values.length - 1]) })).sort((a, b) => a.y - b.y);
-        const collide = ends.some((e, i) => i && e.y - ends[i - 1].y < 13);
-        if (!collide) ends.forEach(e => {
+        series.map(s => ({ s, y: Y(s.values[s.values.length - 1]) })).forEach(e => {
           const tx = svgEl('text', { x: W - m.r + 8, y: e.y + 4, class: 'label' }, svg);
           tx.textContent = e.s.name.length > 16 ? e.s.name.slice(0, 15) + '…' : e.s.name;
         });
