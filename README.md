@@ -70,6 +70,16 @@ column), the customer page, the customers CSV, and `/api/account/…`.
   Never set a session cookie on Railway.
 - Runs at the end of the nightly sync (non-fatal, own transaction). Without credentials
   it is skipped and existing data is kept. Refresh on its own: `python -m sync.metabase`.
+- **Until the API key exists, refresh production by hand.** This runs inside the `web`
+  container and passes your local session cookie on stdin. Nothing is stored on Railway,
+  and the database stays private. Needs `railway link` to this project and an SSH key
+  registered via `railway ssh keys add`:
+  ```bash
+  { grep '^METABASE_SESSION=' .env | cut -d= -f2- | tr -d '[:space:]'; echo; } \
+    | railway ssh --service web -- 'read -r METABASE_SESSION && export METABASE_SESSION && python -m sync.metabase'
+  ```
+  The nightly ChartMogul/SFDC sync doesn't clear these counts, and the site picks up a
+  refresh on the next page load.
 - "Active" = `PROVIDER_IS_ACTIVE` (not deactivated), not recent usage. ~95% of orgs have
   at least one. Use last provider activity for recency.
 - Providers at sub-organizations count under the sub-org's own ID, not the parent's.
