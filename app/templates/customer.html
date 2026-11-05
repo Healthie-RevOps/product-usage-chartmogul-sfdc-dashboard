@@ -2,64 +2,157 @@
 {% block title %}{{ c.name if c else "Not found" }}{% endblock %}
 
 {% block content %}
-<p class="back" style="margin-top:14px"><a href="/">← All customers</a></p>
+<p style="margin:0 0 8px"><a href="javascript:history.length > 1 ? history.back() : location.assign('/')">← Back to explorer</a></p>
 
 {% if not c %}
-<div class="empty">Customer not found.</div>
+<div class="card empty">Customer not found. It may have been removed in the last sync.</div>
 {% else %}
-<div class="figures">
-  <div><b>{{ c.name or c.email }}</b><span>{{ c.email }} · {{ c.status }}</span></div>
-  <div><b>{{ c.mrr_cents|money(c.currency) }}</b><span>current MRR</span></div>
-  <div><b>{{ c.customer_since.strftime("%b %Y") if c.customer_since else "—" }}</b><span>customer since</span></div>
-  {% if not c.sfdc_account %}<div class="warn"><b>unmatched</b><span>no SFDC account joined</span></div>{% endif %}
+{% set events = history.events %}
+{% set peak = (events | map(attribute="mrr") | max) if events else c.mrr %}
+<div class="page-head">
+  <h1>{{ c.name }}</h1>
+  {% if c.status != "Active" %}<span class="tag former">{{ c.status }}</span>{% endif %}
+  {% if not acct %}<span class="tag warn">not matched to Salesforce</span>{% endif %}
+</div>
+<div class="facts" style="margin-bottom:14px">
+  {% if c.partner %}<span class="tag warn">non-EHR revenue bucket, not a customer</span>{% endif %}
+  {% if c.billing_name and c.billing_name != c.name %}<span>Billing contact <b>{{ c.billing_name }}</b></span>{% endif %}
+  {% if c.email %}<span>Billing email <b>{{ c.email }}</b></span>{% endif %}
+  {% if acct %}<span>Salesforce <a href="{{ lightning_base }}/lightning/r/Account/{{ acct.id }}/view" target="_blank" rel="noopener"><b>{{ acct.name }}</b></a></span>
+  <span>Owner <b>{{ acct.owner or "—" }}</b></span>{% endif %}
+  {% if c.cm_url %}<span><a href="{{ c.cm_url }}" target="_blank" rel="noopener">Open in ChartMogul ↗</a></span>{% endif %}
 </div>
 
-<h2>Products</h2>
-{% if c.subscriptions %}
-<table>
-  <thead><tr><th>Plan</th><th class="num">Quantity</th><th class="num">MRR</th>
-    <th>Cycle</th><th>Status</th><th>Started</th></tr></thead>
-  <tbody>
-  {% for s in c.subscriptions %}
-    <tr>
-      <td>{{ s.plan_name }}</td>
-      <td class="num">{{ s.quantity or "—" }}</td>
-      <td class="num">{{ s.mrr_cents|money(s.currency) }}</td>
-      <td>{{ s.billing_cycle or "—" }}</td>
-      <td class="status">{{ s.status }}</td>
-      <td class="status">{{ s.start_date.strftime("%Y-%m-%d") if s.start_date else "—" }}</td>
-    </tr>
-  {% endfor %}
-  </tbody>
-</table>
-{% else %}<div class="empty">No subscriptions on record.</div>{% endif %}
+<div class="kpis">
+  <div class="kpi"><div class="label">Current MRR</div><div class="value">{{ c.mrr|money(c.currency) }}</div><div class="note">ARR {{ (c.mrr * 12)|money(c.currency) }}</div></div>
+  <div class="kpi"><div class="label">Peak MRR</div><div class="value">{{ peak|money(c.currency) }}</div><div class="note">highest after any change</div></div>
+  <div class="kpi"><div class="label">Customer since</div><div class="value">{{ c.since[:7] if c.since else "—" }}</div><div class="note">{{ events|length }} revenue changes</div></div>
+  {% set live = history.segments | selectattr("current") | map(attribute="product") | unique | list %}
+  {% set ever = history.segments | map(attribute="product") | unique | list %}
+  <div class="kpi"><div class="label">Products</div><div class="value">{{ live|length }} <span class="small muted">now</span></div><div class="note">{{ ever|length }} ever held</div></div>
+  {% if acct %}
+  <div class="kpi"><div class="label">Contract value</div><div class="value">{{ acct.contract_value|dollars }}</div><div class="note">{% if acct.contract_end %}ends {{ acct.contract_end }}{% else %}latest won opp{% endif %}</div></div>
+  <div class="kpi"><div class="label">Active users</div><div class="value">{{ acct.active_users|num }}</div><div class="note">{% if acct.active_clients %}{{ acct.active_clients|num }} active clients{% else %}Healthie users in Salesforce{% endif %}</div></div>
+  <div class="kpi" title="Healthie product data via Metabase, joined on the Salesforce account's Healthie Org ID. Excludes test and Healthie-employee accounts."><div class="label">Providers</div>
+    {% if acct.hl_providers is not none %}<div class="value">{{ acct.hl_active_providers|num }} <span class="small muted">active</span></div><div class="note">of {{ acct.hl_providers|num }} · {{ acct.hl_admins|num }} admins · last activity {{ acct.hl_last_activity or "—" }}</div>
+    {% elif acct.org_id %}<div class="value">—</div><div class="note">Org ID {{ acct.org_id }} not found in Healthie data</div>
+    {% else %}<div class="value">—</div><div class="note">no Healthie Org ID in Salesforce</div>{% endif %}</div>
+  {% if acct.hl_clients is not none %}<div class="kpi" title="Healthie clients (patients) at the org, counts only. Excludes test users."><div class="label">Clients</div><div class="value">{{ acct.hl_active_clients|num }} <span class="small muted">active</span></div><div class="note">of {{ acct.hl_clients|num }} in Healthie</div></div>{% endif %}
+  {% endif %}
+</div>
 
-<h2>Salesforce</h2>
-{% if c.sfdc_account %}
-<p>
-  <a href="{{ lightning_base }}/lightning/r/Account/{{ c.sfdc_account.id }}/view" target="_blank" rel="noopener">
-    {{ c.sfdc_account.name }}</a>
-  · Owner: {{ c.sfdc_account.owner_name or "—" }}
-  · Matched via <span class="chip">{{ c.match_method }}</span>
-  {% if c.cm_url %} · <a href="{{ c.cm_url }}" target="_blank" rel="noopener">Open in ChartMogul</a>{% endif %}
-</p>
-{% if c.sfdc_account.contacts %}
-<table style="margin-top:10px">
-  <thead><tr><th>Contact</th><th>Title</th><th>Email</th></tr></thead>
-  <tbody>
-  {% for ct in c.sfdc_account.contacts %}
-    <tr>
-      <td><a href="{{ lightning_base }}/lightning/r/Contact/{{ ct.id }}/view" target="_blank" rel="noopener">{{ ct.name }}</a></td>
-      <td>{{ ct.title or "—" }}</td>
-      <td>{{ ct.email or "—" }}</td>
-    </tr>
-  {% endfor %}
-  </tbody>
-</table>
-{% else %}<p class="status">No contacts on this account.</p>{% endif %}
-{% else %}
-<div class="empty">Unmatched — no Stripe Customer ID or Healthie Org ID on any SFDC account lined up
-with this ChartMogul customer. Fix the ID on the Account and it will join on the next nightly sync.</div>
-{% endif %}
+<section class="card">
+  <div class="card-head"><h2>Revenue over time</h2><span class="spacer"></span>
+    <button class="linklike" data-table-toggle="mrr">View as table</button></div>
+  <div id="mrr-chart"></div>
+  <div id="mrr-table" hidden></div>
+  <div class="note-line">Total MRR after each ChartMogul revenue event (dots). Hover a dot for what changed.</div>
+</section>
+
+<section class="card">
+  <div class="card-head"><h2>Products over time</h2>
+    <span class="legend" style="margin:0"><span><i class="box" style="background:var(--series-1)"></i>Current</span><span><i class="box" style="background:#B4B9C4"></i>Ended</span></span>
+    <span class="spacer"></span>
+    <button class="linklike" data-table-toggle="timeline">View as table</button></div>
+  <div id="timeline-chart"></div>
+  <div id="timeline-table" hidden></div>
+</section>
+
+<section class="card">
+  <div class="card-head"><h2>All changes <span class="count">{{ events|length }}</span></h2></div>
+  {% if events %}
+  <div class="table-wrap" style="max-height:420px">
+    <table class="data">
+      <thead><tr><th>Date</th><th>Change</th><th class="num">MRR change</th><th class="num">MRR after</th><th>Product</th><th>What happened</th></tr></thead>
+      <tbody>
+      {% for e in events|reverse %}
+        <tr>
+          <td class="small" style="white-space:nowrap">{{ e.date }}</td>
+          <td><span class="evt {{ 'up' if e.movement > 0 else 'down' if e.movement < 0 else '' }}">{{ (e.type or "")|replace("_", " ")|replace("new biz", "new business") }}</span></td>
+          <td class="num {{ 'delta-up' if e.movement > 0 else 'delta-down' if e.movement < 0 else '' }}">{{ ("+" if e.movement > 0 else "−" if e.movement < 0 else "") }}{{ (e.movement|abs)|money(c.currency) }}</td>
+          <td class="num">{{ e.mrr|money(c.currency) }}</td>
+          <td class="small">{{ e.product or "—" }}</td>
+          <td class="small">{{ e.description or "" }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}<div class="empty">No revenue events recorded in ChartMogul.</div>{% endif %}
+</section>
+
+<div class="grid-2">
+<section class="card">
+  <div class="card-head"><h2>Subscriptions <span class="count">{{ history.segments|length }}</span></h2></div>
+  <div class="table-wrap" style="max-height:360px">
+    <table class="data">
+      <thead><tr><th>Plan</th><th class="num">Qty</th><th class="num">MRR</th><th>Start</th><th>End</th></tr></thead>
+      <tbody>
+      {% for s in history.segments|sort(attribute="current", reverse=true) %}
+        <tr>
+          <td><a href="/?product={{ s.product|urlencode }}&view=all">{{ s.plan or s.product }}</a>
+            {% if not s.current %}<span class="tag former">ended</span>{% endif %}</td>
+          <td class="num">{{ s.qty or "—" }}</td>
+          <td class="num">{{ s.mrr|money(c.currency) if s.current else "—" }}</td>
+          <td class="small date">{{ s.start or "—" }}</td>
+          <td class="small date">{{ s.end or ("renews" if s.current else "—") }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="card">
+  <div class="card-head"><h2>Contracts <span class="count">{{ contracts|length }}</span></h2></div>
+  {% if contracts %}
+  <div class="table-wrap" style="max-height:360px">
+    <table class="data">
+      <thead><tr><th>Opportunity</th><th>Closed</th><th class="num">Contract value</th><th class="num">Year-1 ACV</th><th>Term</th></tr></thead>
+      <tbody>
+      {% for k in contracts %}
+        <tr>
+          <td><a href="{{ lightning_base }}/lightning/r/Opportunity/{{ k.id }}/view" target="_blank" rel="noopener">{{ k.name }}</a>
+            {% if k.opp_type %}<div class="small muted">{{ k.opp_type }}</div>{% endif %}</td>
+          <td class="small date">{{ k.close_date or "—" }}</td>
+          <td class="num">{{ k.value|dollars }}</td>
+          <td class="num">{{ k.year1_acv|dollars }}</td>
+          <td class="small">{% if k.contract_start or k.contract_end %}{{ k.contract_start or "?" }} → {{ k.contract_end or "?" }}{% else %}—{% endif %}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}<div class="empty">{{ "No closed-won opportunities on this account." if acct else "Not matched to Salesforce." }}</div>{% endif %}
+</section>
+</div>
+<div style="height:16px"></div>
+
+<section class="card">
+  <div class="card-head">
+    <h2>Contacts <span class="count" id="contact-count">{{ contacts|length }}</span></h2>
+    <div class="seg" role="group" aria-label="Which contacts" id="active-seg">
+      <button data-active="1" aria-pressed="false">Active Healthie users</button>
+      <button data-active="0" aria-pressed="true">All contacts</button>
+    </div>
+    <span class="spacer"></span>
+    <button class="btn small" id="export-selected" disabled>↓ Export selected</button>
+    <button class="btn small primary" id="export-all">↓ Export contacts CSV</button>
+  </div>
+  {% if contacts %}
+  <div class="table-wrap">
+    <table class="data">
+      <thead><tr><th class="check"><input type="checkbox" id="check-all" aria-label="Select all contacts"></th>
+        <th>Name</th><th>Email</th><th>Phone</th><th>Title</th><th>Role</th></tr></thead>
+      <tbody id="contact-body"></tbody>
+    </table>
+  </div>
+  {% else %}<div class="empty">{{ "No contacts on this Salesforce account." if acct else "Not matched to Salesforce, so no contacts." }}</div>{% endif %}
+</section>
+
+<form id="export-form" method="post" action="/export/contacts.csv" hidden><input type="hidden" name="spec" id="export-spec"></form>
+<script id="customer-data" type="application/json">{{ {"uuid": c.uuid, "currency": c.currency, "mrr": c.mrr, "history": history, "contacts": contacts, "lightning": lightning_base}|tojson }}</script>
 {% endif %}
 {% endblock %}
+
+{% block scripts %}{% if c %}<script src="/static/customer.js?v=5"></script>{% endif %}{% endblock %}

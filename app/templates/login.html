@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign in · Product Explorer · Healthie</title>
+  <link rel="icon" href="/static/healthie-mark.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/app.css?v=5">
+  {% if not unconfigured %}<script src="https://accounts.google.com/gsi/client" async defer></script>{% endif %}
+</head>
+<body class="login-page">
+  <main class="login-card">
+    <img src="/static/healthie-lockup.png" alt="Healthie" class="login-logo">
+    <h1>Product Explorer</h1>
+    {% if unconfigured %}
+      <p class="error">Sign-in is not configured (SESSION_SECRET is missing), so this app is refusing to open.</p>
+    {% else %}
+      <p class="muted">Products, revenue, contracts and contacts from ChartMogul and Salesforce.
+        Sign in with your @{{ domain }} Google account.</p>
+      <div id="g_id_onload" data-client_id="{{ client_id }}" data-callback="onGoogleCredential"
+           data-hd="{{ domain }}" data-auto_prompt="false" data-ux_mode="popup"></div>
+      <div class="g_id_signin" data-type="standard" data-theme="outline" data-size="large"
+           data-text="signin_with" data-shape="pill" data-width="280"></div>
+      <p id="login-error" class="error" hidden></p>
+    {% endif %}
+  </main>
+  <script>
+    const NEXT = {{ next|tojson }};
+    async function onGoogleCredential(resp) {
+      const err = document.getElementById('login-error');
+      err.hidden = true;
+      const r = await fetch('/auth/google', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', 'X-Requested-With': 'fetch'},
+        body: JSON.stringify({credential: resp.credential}),
+      });
+      if (r.ok) { location.href = NEXT; return; }
+      const body = await r.json().catch(() => ({}));
+      err.textContent = body.detail || 'Sign-in failed.';
+      err.hidden = false;
+    }
+  </script>
+</body>
+</html>
