@@ -18,7 +18,9 @@ from sqlalchemy.orm import selectinload
 from starlette.middleware.sessions import SessionMiddleware
 
 from app import auth, data
-from app.db import Customer, SfdcAccount, SfdcContract, SyncRun, init_db, SessionLocal
+from app.db import (
+    Customer, HealthieOrgUsage, SfdcAccount, SfdcContract, SyncRun, init_db, SessionLocal,
+)
 
 app = FastAPI(title="Healthie ChartMogul x SFDC", docs_url=None, redoc_url=None,
               openapi_url=None)
@@ -363,6 +365,8 @@ def export_customers(spec: str = Form("{}")):
             ["customer", "billing_name", "email", "status", "products", "product_status", "product_mrr_usd",
              "seats", "total_mrr_usd", "since", "ended", "sfdc_account", "owner", "health",
              "active_users", "contacts", "contract_value_usd", "contract_end",
+             "healthie_org_id", "providers_active", "providers_total", "provider_admins",
+             "last_provider_activity", "clients_active", "clients_total",
              "chartmogul_uuid", "sfdc_account_id"],
             ([r["name"], r["billing_name"], r["email"], r["status"],
               "; ".join(p["product"] + ("" if p["current"] else " (former)")
@@ -371,8 +375,12 @@ def export_customers(spec: str = Form("{}")):
               r["mrr"] / 100, r["since"], r["ended"],
               *((r["account"]["name"], r["account"]["owner"], r["account"]["health"],
                  r["account"]["active_users"], r["account"]["contacts"],
-                 r["account"]["contract_value"], r["account"]["contract_end"])
-                if r["account"] else ("",) * 7),
+                 r["account"]["contract_value"], r["account"]["contract_end"],
+                 r["account"]["org_id"], r["account"]["hl_active_providers"],
+                 r["account"]["hl_providers"], r["account"]["hl_admins"],
+                 r["account"]["hl_last_activity"], r["account"]["hl_active_clients"],
+                 r["account"]["hl_clients"])
+                if r["account"] else ("",) * 14),
               r["uuid"], r["account"]["id"] if r["account"] else ""] for r in rows),
             f"customers_{_slug(s)}_{date.today().isoformat()}.csv")
     finally:
@@ -394,13 +402,21 @@ def api_account(sfdc_account_id: str):
         )
         if not acct:
             return JSONResponse({"error": "not found"}, status_code=404)
+        hl = (session.get(HealthieOrgUsage, acct.healthie_org_id.strip())
+              if acct.healthie_org_id else None)
         return JSONResponse({
             "account": {"id": acct.id, "name": acct.name, "owner": acct.owner_name,
                         "healthie_org_id": acct.healthie_org_id,
                         "usage": {"active_standard_users": acct.active_standard_users,
                                   "active_clients": acct.active_clients,
                                   "providers": acct.num_providers,
-                                  "health_score": acct.health_score}},
+                                  "health_score": acct.health_score},
+                        "healthie_product": ({
+                            "providers": hl.providers, "active_providers": hl.active_providers,
+                            "admins": hl.admins,
+                            "last_provider_activity": _iso(hl.last_provider_activity),
+                            "clients": hl.clients, "active_clients": hl.active_clients,
+                        } if hl else None)},
             "contacts": [{"name": c.name, "email": c.email, "title": c.title,
                           "phone": c.phone, "mobile_phone": c.mobile_phone,
                           "healthie_user_active": c.user_active, "user_type": c.user_type,

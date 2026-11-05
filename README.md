@@ -49,6 +49,31 @@ that pay for X. It does not mean those people use feature X. True per-product us
 needs event data from the product DB, warehouse, or Vitally directly. That source is not
 connected yet.
 
+## Healthie product data (Metabase)
+
+`sync/metabase.py` pulls **org-level counts** from two saved Metabase questions in the
+Revenue Operations collection:
+- **"Provider counts by Org"** (card 11966, `DBT_L30_MART.DIM_PROVIDERS`, test and
+  Healthie-employee accounts excluded): providers, active providers, admins, last provider activity.
+- **"Client counts by Org"** (card 11967, `DBT_L30_MART.DIM_CLIENTS`, test users excluded):
+  clients (patients) and active clients. Counts only.
+
+It joins to SFDC accounts on `Healthie_Org_ID__c` and shows up in the Explorer (Providers
+column), the customer page, the customers CSV, and `/api/account/…`.
+
+- **Aggregates only.** Healthie data includes patient PHI. Each question has a column
+  allowlist, and the sync refuses to load anything if Metabase returns another column.
+- **Saved questions only, no SQL.** The gateway in front of Metabase blocks ad-hoc SQL
+  from outside the UI. Edit the query in Metabase, not here.
+- **Auth:** `METABASE_API_KEY` (target: a read-only key limited to one collection), or
+  `METABASE_SESSION` (your browser's `metabase.SESSION` cookie) for **local testing only**.
+  Never set a session cookie on Railway.
+- Runs at the end of the nightly sync (non-fatal, own transaction). Without credentials
+  it is skipped and existing data is kept. Refresh on its own: `python -m sync.metabase`.
+- "Active" = `PROVIDER_IS_ACTIVE` (not deactivated), not recent usage. ~95% of orgs have
+  at least one. Use last provider activity for recency.
+- Providers at sub-organizations count under the sub-org's own ID, not the parent's.
+
 ## Architecture
 
 ```

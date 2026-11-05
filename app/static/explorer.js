@@ -233,6 +233,8 @@
     contract_value: r => r.account ? (r.account.contract_value || 0) : -1,
     contract_end: r => r.account ? (r.account.contract_end || '') : '',
     active_users: r => r.account ? r.account.active_users : -1,
+    providers: r => r.account && r.account.hl_active_providers != null ? r.account.hl_active_providers : -1,
+    clients: r => r.account && r.account.hl_active_clients != null ? r.account.hl_active_clients : -1,
     owner: r => r.account ? (r.account.owner || '').toLowerCase() : '~',
   };
   document.querySelectorAll('#cust-table-el th.sortable').forEach(th => th.addEventListener('click', () => {
@@ -291,12 +293,19 @@
       tr.appendChild(h('td', 'num', ac && ac.contract_value ? fmt.money(ac.contract_value * 100) : '—'));
       tr.appendChild(h('td', 'small date', ac && ac.contract_end ? ac.contract_end : '—'));
       tr.appendChild(h('td', 'num', ac ? fmt.int(ac.active_users) : '—'));
+      const prov = h('td', 'num', ac && ac.hl_active_providers != null ? fmt.int(ac.hl_active_providers) : '—');
+      if (ac && ac.hl_providers != null) prov.title = `${fmt.int(ac.hl_active_providers)} active of ${fmt.int(ac.hl_providers)} providers · ${fmt.int(ac.hl_admins)} admins · last provider activity ${ac.hl_last_activity || '—'} · Org ID ${ac.org_id}`;
+      else if (ac && !ac.org_id) prov.title = 'No Healthie Org ID on the Salesforce account';
+      tr.appendChild(prov);
+      const cli = h('td', 'num', ac && ac.hl_active_clients != null ? fmt.int(ac.hl_active_clients) : '—');
+      if (ac && ac.hl_clients != null) cli.title = `${fmt.int(ac.hl_active_clients)} active of ${fmt.int(ac.hl_clients)} clients`;
+      tr.appendChild(cli);
       tr.appendChild(h('td', 'small', ac && ac.health ? ac.health : '—'));
       tr.appendChild(h('td', 'small', ac && ac.owner ? ac.owner : '—'));
       body.appendChild(tr);
     });
     if (!rows.length) {
-      const tr = h('tr'); const td = h('td', 'empty', 'No customers match these filters.'); td.colSpan = 12; tr.appendChild(td); body.appendChild(tr);
+      const tr = h('tr'); const td = h('td', 'empty', 'No customers match these filters.'); td.colSpan = 14; tr.appendChild(td); body.appendChild(tr);
     }
     $('cust-count').textContent = fmt.int(state.totals.shown);
     $('cust-note').textContent = state.totals.shown > rows.length

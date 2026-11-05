@@ -7,6 +7,8 @@
   2. SFDC: only the Accounts whose Stripe Customer ID / Healthie Org ID came back in step 1
      (not all ~212k accounts with a Stripe ID).
   3. Match, then contacts + closed-won contracts for matched accounts.
+  4. Healthie org usage from Metabase (sync/metabase.py), if configured. Separate
+     transaction, non-fatal.
 
 Match waterfall (recorded per customer as match_method):
   1. stripe_id — ChartMogul external_id (cus_...) == Account.Stripe_Customer_ID__c
@@ -29,6 +31,7 @@ from app.db import (
     SyncRun, init_db, session_scope,
 )
 from sync import chartmogul as cm
+from sync import metabase
 from sync import sfdc
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -284,6 +287,13 @@ def main():
             run.finished_at = datetime.now(timezone.utc)
             run.error = str(exc)[:4000]
         sys.exit(1)
+
+    # Healthie product usage (Metabase). Own transaction; a failure here is logged but
+    # never fails the ChartMogul/SFDC snapshot, and the previous usage data stays.
+    try:
+        metabase.sync_org_usage()
+    except Exception:
+        log.exception("Metabase org usage sync failed; keeping previous data")
 
 
 if __name__ == "__main__":

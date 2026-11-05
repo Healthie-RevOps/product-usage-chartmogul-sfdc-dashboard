@@ -33,6 +33,11 @@
   {% if acct %}
   <div class="kpi"><div class="label">Contract value</div><div class="value">{{ acct.contract_value|dollars }}</div><div class="note">{% if acct.contract_end %}ends {{ acct.contract_end }}{% else %}latest won opp{% endif %}</div></div>
   <div class="kpi"><div class="label">Active users</div><div class="value">{{ acct.active_users|num }}</div><div class="note">{% if acct.active_clients %}{{ acct.active_clients|num }} active clients{% else %}Healthie users in Salesforce{% endif %}</div></div>
+  <div class="kpi" title="Healthie product data via Metabase, joined on the Salesforce account's Healthie Org ID. Excludes test and Healthie-employee accounts."><div class="label">Providers</div>
+    {% if acct.hl_providers is not none %}<div class="value">{{ acct.hl_active_providers|num }} <span class="small muted">active</span></div><div class="note">of {{ acct.hl_providers|num }} · {{ acct.hl_admins|num }} admins · last activity {{ acct.hl_last_activity or "—" }}</div>
+    {% elif acct.org_id %}<div class="value">—</div><div class="note">Org ID {{ acct.org_id }} not found in Healthie data</div>
+    {% else %}<div class="value">—</div><div class="note">no Healthie Org ID in Salesforce</div>{% endif %}</div>
+  {% if acct.hl_clients is not none %}<div class="kpi" title="Healthie clients (patients) at the org, counts only. Excludes test users."><div class="label">Clients</div><div class="value">{{ acct.hl_active_clients|num }} <span class="small muted">active</span></div><div class="note">of {{ acct.hl_clients|num }} in Healthie</div></div>{% endif %}
   {% endif %}
 </div>
 

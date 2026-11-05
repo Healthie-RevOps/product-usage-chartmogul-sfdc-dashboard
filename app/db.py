@@ -174,6 +174,23 @@ class SfdcContract(Base):
         return self.total_contract_value or self.year1_acv or self.amount
 
 
+class HealthieOrgUsage(Base):
+    """Org-level product usage from Healthie's warehouse via a saved Metabase question
+    (sync/metabase.py). Aggregates only, never person-level rows. Joined to SFDC
+    accounts on Healthie_Org_ID__c. Refreshed separately from the nightly snapshot, and
+    kept as-is when Metabase isn't configured."""
+    __tablename__ = "healthie_org_usage"
+
+    org_id = Column(String, primary_key=True)            # Healthie organization ID
+    providers = Column(Integer)                          # excl. test + Healthie-employee users
+    active_providers = Column(Integer)                   # PROVIDER_IS_ACTIVE (not deactivated)
+    admins = Column(Integer)
+    last_provider_activity = Column(Date)                # most recent provider login, any
+    clients = Column(Integer)                            # patients, excl. test users
+    active_clients = Column(Integer)                     # CLIENT_IS_ACTIVE
+    synced_at = Column(DateTime, server_default=func.now())
+
+
 class SyncRun(Base):
     __tablename__ = "sync_runs"
 

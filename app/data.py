@@ -16,7 +16,7 @@ from datetime import date, datetime, timezone
 from sqlalchemy import desc, func
 
 from app.db import (
-    Activity, Customer, ProductMrr, SfdcAccount, SfdcContact, SfdcContract, Subscription,
+    Activity, Customer, HealthieOrgUsage, ProductMrr, SfdcAccount, SfdcContact, SfdcContract, Subscription,
     SyncRun,
 )
 
@@ -58,7 +58,7 @@ class Sub:
 
 @dataclass
 class Snapshot:
-    run_id: int | None
+    run_id: tuple | None
     customers: dict[str, dict] = field(default_factory=dict)
     accounts: dict[str, dict] = field(default_factory=dict)
     subs_by_customer: dict[str, list[Sub]] = field(default_factory=lambda: defaultdict(list))
@@ -72,8 +72,13 @@ _lock = threading.Lock()
 _snap: Snapshot | None = None
 
 
-def _latest_success_id(session) -> int | None:
-    return session.query(func.max(SyncRun.id)).filter(SyncRun.status == "success").scalar()
+def _latest_success_id(session) -> tuple | None:
+    """Cache key: latest successful nightly sync + latest Healthie org usage refresh
+    (that one can be refreshed on its own: python -m sync.metabase)."""
+    run = session.query(func.max(SyncRun.id)).filter(SyncRun.status == "success").scalar()
+    if run is None:
+        return None
+    return run, session.query(func.max(HealthieOrgUsage.synced_at)).scalar()
 
 
 def snapshot(session) -> Snapshot:
@@ -111,14 +116,25 @@ def _build(session, run_id) -> Snapshot:
               .order_by(SfdcContract.account_id, desc(SfdcContract.close_date))):
         if c.account_id not in latest and c.value:
             latest[c.account_id] = (c.value, c.contract_end)
+    usage = {u.org_id: u for u in session.query(HealthieOrgUsage)}
     for a in session.query(SfdcAccount):
         value, end = latest.get(a.id, (None, None))
+        u = usage.get((a.healthie_org_id or "").strip())
         s.accounts[a.id] = {
             "id": a.id, "name": a.name, "owner": a.owner_name, "health": a.health_score,
             "active_clients": a.active_clients, "active_standard_users": a.active_standard_users,
             "providers": a.num_providers,
             "active_users": active_users.get(a.id, 0), "contacts": contact_counts.get(a.id, 0),
             "contract_value": value, "contract_end": end.isoformat() if end else None,
+            # Healthie product data (Metabase), joined on the account's Healthie Org ID
+            "org_id": a.healthie_org_id,
+            "hl_providers": u.providers if u else None,
+            "hl_active_providers": u.active_providers if u else None,
+            "hl_admins": u.admins if u else None,
+            "hl_last_activity": (u.last_provider_activity.isoformat()
+                                 if u and u.last_provider_activity else None),
+            "hl_clients": u.clients if u else None,
+            "hl_active_clients": u.active_clients if u else None,
         }
 
     for c in session.query(Customer):
@@ -224,7 +240,10 @@ def customer_rows(snap: Snapshot, products: list[str], view: str = "current",
             "ended": None if current else (max(ends).date().isoformat() if ends else None),
             "account": ({k: acct[k] for k in ("id", "name", "owner", "health",
                                                "active_users", "contacts", "contract_value",
-                                               "contract_end", "active_clients")}
+                                               "contract_end", "active_clients", "org_id",
+                                               "hl_providers", "hl_active_providers",
+                                               "hl_admins", "hl_last_activity",
+                                               "hl_clients", "hl_active_clients")}
                         if acct else None),
         })
     rows.sort(key=lambda r: (-r["product_mrr"], -r["mrr"], r["name"].lower()))

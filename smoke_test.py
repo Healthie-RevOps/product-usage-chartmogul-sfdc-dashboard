@@ -18,7 +18,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from app import auth, main  # noqa: E402
 from app.db import (  # noqa: E402
-    Activity, Customer, ProductMrr, SfdcAccount, SfdcContact, SfdcContract, Subscription,
+    Activity, Customer, HealthieOrgUsage, ProductMrr, SfdcAccount, SfdcContact, SfdcContract, Subscription,
     SyncRun, init_db, session_scope,
 )
 
@@ -108,6 +108,11 @@ with session_scope() as s:
                        (date(2025, 6, 30), 265000), (date(2025, 12, 31), 265000)):
         s.add(ProductMrr(product="Group Plan", month=month, mrr_cents=mrr))
         s.add(ProductMrr(product="Plus Plan", month=month, mrr_cents=mrr // 4))
+    # Healthie product usage (Metabase) for Acme's org 12345, plus an org nobody maps to
+    s.add(HealthieOrgUsage(org_id="12345", providers=12, active_providers=9, admins=2,
+                           last_provider_activity=date(2026, 11, 1), clients=500,
+                           active_clients=420))
+    s.add(HealthieOrgUsage(org_id="99999", providers=1, active_providers=1, admins=1))
     s.add(SyncRun(finished_at=datetime.now(), status="success", customers_synced=4,
                   subscriptions_synced=6, accounts_synced=3, contacts_synced=4,
                   matched=3, unmatched=1))
@@ -173,6 +178,48 @@ check("multi-product MRR sums both products", multi_row["product_mrr"], 30000)
 check("unmatched counted", ex["totals"]["unmatched"], 1)
 ex = client.get("/api/explore?match=unmatched").json()
 check("match=unmatched", [r["uuid"] for r in ex["rows"]], [ORPHAN])
+
+print("\nhealthie org usage (Metabase):")
+ex = client.get("/api/explore?product=Group+Plan").json()
+acme = next(r for r in ex["rows"] if r["uuid"] == ACME)["account"]
+check("usage joined on Org ID", (acme["org_id"], acme["hl_active_providers"], acme["hl_providers"],
+                                 acme["hl_admins"], acme["hl_last_activity"]),
+      ("12345", 9, 12, 2, "2026-11-01"))
+multi = next(r for r in ex["rows"] if r["uuid"] == MULTI)["account"]
+check("account without Org ID has no usage", (multi["org_id"], multi["hl_providers"]), (None, None))
+page = client.get("/customer/" + ACME).text
+check("customer page shows Providers KPI", "9 <span class=\"small muted\">active</span>" in page, True)
+check("customer page without Org ID explains why",
+      "no Healthie Org ID in Salesforce" in client.get("/customer/" + MULTI).text, True)
+api = client.get("/api/account/001000000000001AAA").json()["account"]
+check("account API includes healthie_product", api["healthie_product"],
+      {"providers": 12, "active_providers": 9, "admins": 2, "last_provider_activity": "2026-11-01",
+       "clients": 500, "active_clients": 420})
+check("customer page shows Clients KPI", "of 500 in Healthie" in page, True)
+check("clients in explorer row", (acme["hl_active_clients"], acme["hl_clients"]), (420, 500))
+rows = {r["customer"]: r for r in csv_rows(client.post("/export/customers.csv", data=spec()))}
+check("customers CSV has provider columns",
+      (rows["Acme Health"]["healthie_org_id"], rows["Acme Health"]["providers_active"],
+       rows["Acme Health"]["providers_total"], rows["Acme Health"]["last_provider_activity"],
+       rows["Acme Health"]["clients_active"], rows["Acme Health"]["clients_total"]),
+      ("12345", "9", "12", "2026-11-01", "420", "500"))
+
+from sync import metabase as mb  # noqa: E402
+good = {k: 1 for k in mb.PROVIDER_COUNTS_COLUMNS}
+try:
+    mb._check_columns(1, [{**good, "Provider Email": "x@y.test"}], mb.PROVIDER_COUNTS_COLUMNS)
+    check("extra (PII) column refused", "loaded", "refused")
+except mb.MetabaseError as exc:
+    check("extra (PII) column refused", "outside the allowlist" in str(exc), True)
+try:
+    mb._check_columns(1, [{"Count": 1}], mb.PROVIDER_COUNTS_COLUMNS)
+    check("missing columns refused", "loaded", "refused")
+except mb.MetabaseError as exc:
+    check("missing columns refused", "missing expected columns" in str(exc), True)
+mb._check_columns(1, [good], mb.PROVIDER_COUNTS_COLUMNS)
+check("allowlisted columns accepted", True, True)
+check("no Metabase creds -> sync skipped, data kept",
+      (mb.API_KEY, mb.SESSION) == ("", "") and mb.sync_org_usage() is None, True)
 ex = client.get("/api/explore?q=multi").json()
 check("search", [r["uuid"] for r in ex["rows"]], [MULTI])
 ex = client.get("/api/explore?product=Nonexistent").json()
