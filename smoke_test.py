@@ -383,6 +383,63 @@ check("contacts CSV narrows to selected accounts", rows, [])
 check("CSV guard leaves phone numbers alone", (main._csv_cell("+1 555-0100"), main._csv_cell("-3"),
                                                 main._csv_cell("@SUM(A1)")), ("+1 555-0100", "-3", "'@SUM(A1)"))
 
+print("\nwin / loss:")
+from app import deals as dl  # noqa: E402
+
+check("competitor aliases + placeholders",
+      [dl.norm_competitor(x) for x in ("Avon", "Avon Health", "Simple Practice", "SimplePractice",
+                                       "ECW", "Other / Unknown", "None (Healthie User)", "Canvas")],
+      ["Avon Health", "Avon Health", "SimplePractice", "SimplePractice", "eClinicalWorks", None, None, "Canvas"])
+check("loss reason prefixes become their own field",
+      [dl.norm_reason(x) for x in ("NR: Timing", "Timing", "R: Lost to Competitor - Price", "Product  Issues")],
+      [("Timing", "non-regrettable"), ("Timing", None), ("Lost to Competitor - Price", "regrettable"),
+       ("Product Issues", None)])
+check("primary competitor falls back to free text, first name",
+      (dl.primary_competitor(SfdcOpportunity(competitor="Other / Unknown", competition="Athena, eClinicalWorks")),
+       dl.primary_competitor(SfdcOpportunity(competitor="Not Applicable"))), ("athenahealth", None))
+ISO = "Initial Sales Opportunity"
+with session_scope() as s:
+    base = dict(record_type=ISO, is_closed=True, account_id=PROSPECT, account_name="Prospect Ent")
+    s.add(SfdcOpportunity(id="006W1", name="P1", is_won=True, stage="Closed Won", close_date=date(2026, 2, 1),
+                          year1_acv=12000, competitor="Canvas", why_won="API", **base))
+    s.add(SfdcOpportunity(id="006W2", name="P2", is_won=False, stage="Closed Lost", close_date=date(2026, 3, 1),
+                          year1_acv=8000, competitor="Canvas", loss_reason="R: Lost to Competitor - Price", **base))
+    s.add(SfdcOpportunity(id="006W3", name="P3", is_won=False, stage="Closed Lost", close_date=date(2026, 4, 1),
+                          amount=3000, competitor="Avon", secondary_competitor="Canvas",
+                          loss_reason="NR: Timing", **base))
+    s.add(SfdcOpportunity(id="006W4", name="P4", is_won=False, stage="Closed Lost", close_date=date(2026, 4, 2),
+                          competitor="Avon Health", loss_reason="Timing", **base))
+    s.add(SfdcOpportunity(id="006W5", name="P5 old", is_won=False, stage="Closed Lost", close_date=date(2024, 6, 1),
+                          competitor="Other / Unknown", **base))
+    s.add(SfdcOpportunity(id="006W6", name="P6 open", record_type=ISO, is_closed=False, is_won=False,
+                          stage="Discovery", close_date=date(2026, 12, 1), year1_acv=5000, competitor="Canvas",
+                          account_id=PROSPECT, account_name="Prospect Ent"))
+    s.add(SyncRun(finished_at=datetime.now(), status="success"))
+r = client.get("/deals")
+check("win/loss page renders", (r.status_code, "Win / loss" in r.text), (200, True))
+d = client.get(f"/api/deals?record_type={ISO}&date_from=2026-01-01&date_to=2026-12-31").json()
+t = d["totals"]
+check("totals: win rate, ACV (Year 1 ACV else Amount), open",
+      (t["won"], t["lost"], round(t["win_rate"], 2), t["won_value"], t["lost_value"], t["open"]),
+      (1, 3, 0.25, 12000, 11000, 1))
+comp = {g["competitor"]: g for g in d["competitors"]}
+check("by competitor: Avon variants merged; secondary counted",
+      (comp["Avon Health"]["lost"], comp["Canvas"]["won"], comp["Canvas"]["lost"], comp["Canvas"]["open"],
+       comp["Canvas"]["secondary"]), (2, 1, 1, 1, 1))
+reas = {g["reason"]: g for g in d["reasons"]}
+check("by reason: NR: Timing + Timing merged; R/NR split",
+      (reas["Timing"]["lost"], reas["Timing"]["non_regrettable"], reas["Lost to Competitor - Price"]["regrettable"]),
+      (2, 1, 1))
+check("date range excludes older deals", "P5 old" in [x["name"] for x in d["rows"]], False)
+d2 = client.get(f"/api/deals?record_type={ISO}&date_from=2026-01-01&competitor=Canvas").json()
+check("competitor filter matches primary or secondary; breakdown keeps other competitors",
+      (sorted(x["name"] for x in d2["rows"]), "Avon Health" in {g["competitor"] for g in d2["competitors"]}),
+      (["P1", "P2", "P3", "P6 open"], True))
+d3 = client.get(f"/api/deals?record_type={ISO}&outcome=lost&reason=Timing").json()
+check("outcome + reason filters", sorted(x["name"] for x in d3["rows"]), ["P3", "P4"])
+rows = csv_rows(client.post("/export/deals.csv", data=spec(record_type=ISO, outcome="won")))
+check("deals CSV follows filters", [(x["deal"], x["competitor"], x["why_won"]) for x in rows], [("P1", "Canvas", "API")])
+
 print("\nfails closed (no SESSION_SECRET, no insecure override):")
 os.environ.pop("ALLOW_INSECURE_NO_AUTH")
 check("/ -> 503", client.get("/").status_code, 503)
