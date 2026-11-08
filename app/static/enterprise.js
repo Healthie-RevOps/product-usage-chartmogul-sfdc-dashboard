@@ -12,6 +12,7 @@
   const url = new URLSearchParams(location.search);
   const state = {
     paying: url.get('paying') !== '0',
+    plan: url.get('plan') || 'Enterprise',
     status: url.get('status') || '', csm: url.get('csm') || '', segment: url.get('segment') || '',
     impl: url.get('impl') || '', q: url.get('q') || '',
     addons: Object.fromEntries(url.getAll('addon').map(s => s.split(':')).filter(([k, v]) => ADDON_LABEL[k] && STATE_LABEL[v])),
@@ -31,6 +32,7 @@
   function params() {
     const p = new URLSearchParams();
     if (!state.paying) p.set('paying', '0');
+    if (state.plan !== 'Enterprise') p.set('plan', state.plan);
     ['status', 'csm', 'segment', 'impl', 'q'].forEach(k => { if (state[k]) p.set(k, state[k]); });
     Object.entries(state.addons).forEach(([k, v]) => p.append('addon', `${k}:${v}`));
     return p;
@@ -38,7 +40,7 @@
   function syncUrl() {
     const qs = params().toString();
     history.replaceState(null, '', qs ? '?' + qs : location.pathname);
-    const any = !state.paying || state.status || state.csm || state.segment || state.impl || state.q || Object.keys(state.addons).length;
+    const any = !state.paying || state.plan !== 'Enterprise' || state.status || state.csm || state.segment || state.impl || state.q || Object.keys(state.addons).length;
     $('f-clear').hidden = !any;
   }
 
@@ -47,13 +49,13 @@
   async function load() {
     syncUrl();
     const my = ++seq;
-    const p = params(); p.set('paying', state.paying ? 'true' : 'false');
+    const p = params(); p.set('paying', state.paying ? 'true' : 'false'); p.set('plan', state.plan);
     $('matrix-card').classList.add('loading'); $('summary-card').classList.add('loading');
     try {
       const r = await fetch('/api/enterprise?' + p).then(r => r.json());
       if (my !== seq) return;
       if (!App.dataState(r, 'Enterprise data')) return;
-      state.rows = r.rows; state.summary = r.summary; state.totals = r.totals;
+      state.rows = r.rows; state.summary = r.summary; state.totals = r.totals; state.totalRows = r.total_rows;
       const ids = new Set(r.rows.map(x => x.id));
       [...state.selected].forEach(id => { if (!ids.has(id)) state.selected.delete(id); });
       if (!state.facetsLoaded) { fillFacets(r.facets); state.facetsLoaded = true; }
@@ -82,8 +84,10 @@
   [['f-status', 'status'], ['f-csm', 'csm'], ['f-segment', 'segment'], ['f-impl', 'impl']].forEach(([id, k]) =>
     $(id).addEventListener('change', e => { state[k] = e.target.value; load(); }));
   $('f-q').addEventListener('input', debounce(e => { state.q = e.target.value.trim(); load(); }, 300));
+  $('f-plan').addEventListener('change', e => { state.plan = e.target.value; state.selected.clear(); load(); });
   $('f-clear').addEventListener('click', () => {
-    Object.assign(state, { paying: true, status: '', csm: '', segment: '', impl: '', q: '', addons: {} });
+    Object.assign(state, { paying: true, plan: 'Enterprise', status: '', csm: '', segment: '', impl: '', q: '', addons: {} });
+    $('f-plan').value = 'Enterprise';
     ['f-status', 'f-csm', 'f-segment', 'f-impl', 'f-q'].forEach(id => { $(id).value = ''; });
     setSeg(); load();
   });
@@ -112,8 +116,8 @@
     const t = state.totals, el = $('kpis');
     el.textContent = '';
     [
-      ['Accounts', fmt.int(t.accounts), state.paying ? 'paying Enterprise accounts' : 'Enterprise accounts', true],
-      ['MRR', money(t.mrr), 'Salesforce MRR'],
+      ['Accounts', fmt.int(t.accounts), `${state.paying ? 'paying ' : ''}${state.plan === 'All plans' ? 'accounts, all plans' : state.plan + ' accounts'}`, true],
+      ['MRR', money(t.mrr), state.plan === 'Enterprise' ? 'Salesforce MRR' : 'billed (ChartMogul); Salesforce for Enterprise'],
       ['Open add-on deals', fmt.int(t.pipeline), money(t.pipeline_amount) + ' in pipeline'],
       ['Lost add-on deals', fmt.int(t.lost), 'most recent deal was lost'],
     ].forEach(([label, value, note, primary]) => {
@@ -290,7 +294,8 @@
       const tr = h('tr'); const td = h('td', 'empty', 'No accounts match these filters.'); td.colSpan = 5 + ADDONS.length;
       tr.appendChild(td); body.appendChild(tr);
     }
-    $('acct-count').textContent = fmt.int(rows.length);
+    $('acct-count').textContent = fmt.int(state.totalRows ?? rows.length);
+    $('matrix-note').textContent = (state.totalRows || 0) > rows.length ? `Showing the top ${fmt.int(rows.length)} of ${fmt.int(state.totalRows)} by MRR. Narrow the filters, or download the CSV for all of them.` : '';
     selectionChanged();
   }
 
@@ -311,7 +316,7 @@
     ['csm', 'segment', 'impl', 'status'].forEach(k => { if (state[k]) filters.push(state[k]); });
     if (state.q) filters.push(`“${state.q}”`);
     el.append('Downloads will cover ');
-    el.appendChild(h('b', null, n ? `the ${fmt.int(n)} account${n === 1 ? '' : 's'} you ticked` : `all ${fmt.int(state.rows.length)} accounts in step 3`));
+    el.appendChild(h('b', null, n ? `the ${fmt.int(n)} account${n === 1 ? '' : 's'} you ticked` : `all ${fmt.int(state.totalRows ?? state.rows.length)} accounts in step 3`));
     el.append(filters.length && !n ? ` (${filters.join(' · ')}).` : '.');
     if (!n) el.append(' Tick accounts in step 3 to narrow it.');
   }
@@ -320,7 +325,7 @@
   /* ---------------------------------------------------------------- exports */
   function spec(useSelection) {
     return {
-      paying: state.paying, status: state.status, csm: state.csm, segment: state.segment,
+      paying: state.paying, plan: state.plan, status: state.status, csm: state.csm, segment: state.segment,
       impl: state.impl, q: state.q, addons: Object.entries(state.addons).map(([k, v]) => `${k}:${v}`),
       account_ids: useSelection && state.selected.size ? [...state.selected] : null,
     };
@@ -336,6 +341,7 @@
 
   /* ---------------------------------------------------------------- boot */
   $('f-q').value = state.q;
+  $('f-plan').value = state.plan;
   setSeg();
   load();
 })();

@@ -11,7 +11,7 @@
 
   const url = new URLSearchParams(location.search);
   const state = {
-    paying: url.get('paying') !== '0', status: url.get('status') || '', csm: url.get('csm') || '',
+    paying: url.get('paying') !== '0', plan: url.get('plan') || 'Enterprise', status: url.get('status') || '', csm: url.get('csm') || '',
     segment: url.get('segment') || '', impl: url.get('impl') || '', q: url.get('q') || '',
     field: FIELD[url.get('field')] ? url.get('field') : '', is: IS_LABEL[url.get('is')] ? url.get('is') : '',
     rows: [], canEdit: !!window.CAN_EDIT, facetsLoaded: false, sort: { key: 'mrr', dir: -1 },
@@ -30,6 +30,7 @@
   function params() {
     const p = new URLSearchParams();
     if (!state.paying) p.set('paying', '0');
+    if (state.plan !== 'Enterprise') p.set('plan', state.plan);
     ['status', 'csm', 'segment', 'impl', 'q', 'field', 'is'].forEach(k => { if (state[k]) p.set(k, state[k]); });
     return p;
   }
@@ -43,13 +44,13 @@
   async function load() {
     syncUrl();
     const my = ++seq;
-    const p = params(); p.set('paying', state.paying ? 'true' : 'false');
+    const p = params(); p.set('paying', state.paying ? 'true' : 'false'); p.set('plan', state.plan);
     $('table-card').classList.add('loading'); $('summary-card').classList.add('loading');
     try {
       const d = await fetch('/api/accounts?' + p).then(r => r.json());
       if (my !== seq) return;
       if (!App.dataState(d, 'Enterprise account data')) return;
-      state.rows = d.rows; state.canEdit = d.can_edit;
+      state.rows = d.rows; state.canEdit = d.can_edit; state.totalRows = d.total_rows;
       if (!state.facetsLoaded) {
         [['f-status', 'status'], ['f-csm', 'csm'], ['f-segment', 'segment'], ['f-impl', 'impl']].forEach(([id, k]) => {
           d.facets[k].forEach(v => { const o = h('option', null, v); o.value = v; $(id).appendChild(o); });
@@ -71,8 +72,10 @@
   [['f-status', 'status'], ['f-csm', 'csm'], ['f-segment', 'segment'], ['f-impl', 'impl']].forEach(([id, k]) =>
     $(id).addEventListener('change', e => { state[k] = e.target.value; load(); }));
   $('f-q').addEventListener('input', debounce(e => { state.q = e.target.value.trim(); load(); }, 300));
+  $('f-plan').addEventListener('change', e => { state.plan = e.target.value; load(); });
   $('f-clear').addEventListener('click', () => {
-    Object.assign(state, { paying: true, status: '', csm: '', segment: '', impl: '', q: '', field: '', is: '' });
+    Object.assign(state, { paying: true, plan: 'Enterprise', status: '', csm: '', segment: '', impl: '', q: '', field: '', is: '' });
+    $('f-plan').value = 'Enterprise';
     ['f-status', 'f-csm', 'f-segment', 'f-impl', 'f-q'].forEach(id => { $(id).value = ''; });
     setSeg(); load();
   });
@@ -219,12 +222,13 @@
       body.appendChild(tr);
     });
     if (!rows.length) { const tr = h('tr'); const td = h('td', 'empty', 'No accounts match these filters.'); td.colSpan = 3 + FIELDS.length; tr.appendChild(td); body.appendChild(tr); }
-    $('acct-count').textContent = fmt.int(rows.length);
+    $('acct-count').textContent = fmt.int(state.totalRows ?? rows.length);
+    $('table-note').textContent = (state.totalRows || 0) > rows.length ? `Showing the top ${fmt.int(rows.length)} of ${fmt.int(state.totalRows)} by MRR. Narrow the filters, or download the CSV for all of them.` : '';
   }
 
   /* ---------------------------------------------------------------- export + log */
   $('export-accounts').addEventListener('click', () => {
-    $('export-spec').value = JSON.stringify({ paying: state.paying, status: state.status, csm: state.csm,
+    $('export-spec').value = JSON.stringify({ paying: state.paying, plan: state.plan, status: state.status, csm: state.csm,
       segment: state.segment, impl: state.impl, q: state.q, field: state.field, is_: state.is });
     const f = $('export-form'); f.action = '/export/accounts.csv'; f.submit();
   });
@@ -250,6 +254,7 @@
   });
 
   $('f-q').value = state.q;
+  $('f-plan').value = state.plan;
   setSeg();
   load();
 })();

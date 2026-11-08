@@ -1,6 +1,6 @@
-"""Enterprise add-on adoption.
+"""Add-on adoption, by plan (Enterprise by default; see app/segments.py).
 
-One row per Enterprise Salesforce account, one column per add-on, each cell in one state:
+One row per Salesforce account on the chosen plan, one column per add-on, each cell in one state:
 
   has       billed today: SFDC Stripe_Has_* flag, or a live ChartMogul subscription to the
             add-on's product, or a deal won in the last WON_GRACE_DAYS not billed yet
@@ -22,7 +22,7 @@ import threading
 from collections import defaultdict
 from datetime import date, timedelta
 
-from app import data
+from app import data, segments
 from app.db import SfdcAccount, SfdcContact, SfdcOpportunity
 
 WON_GRACE_DAYS = 120
@@ -143,15 +143,19 @@ def invalidate():
 
 def _build(session, snap) -> list[dict]:
     today = date.today()
-    accts = session.query(SfdcAccount).filter(SfdcAccount.current_plan == "Enterprise").all()
-    ids = [a.id for a in accts]
+    accts = []
+    for a in session.query(SfdcAccount):
+        plan = data.account_plan(snap, a.id)
+        if plan:
+            accts.append((a, plan))
+    ids = [a.id for a, _ in accts]
     opps_by_acct: dict[str, list] = defaultdict(list)
     for i in range(0, len(ids), 500):
         for o in session.query(SfdcOpportunity).filter(SfdcOpportunity.account_id.in_(ids[i:i + 500])):
             opps_by_acct[o.account_id].append(o)
 
     rows = []
-    for a in accts:
+    for a, plan in accts:
         # live ChartMogul products on this account's customers
         cm: dict[str, list[str]] = defaultdict(list)
         uuids = snap.customers_by_account.get(a.id, [])
@@ -169,7 +173,8 @@ def _build(session, snap) -> list[dict]:
         rows.append({
             "id": a.id, "name": data.clean_name(a.name), "sfdc_name": a.name,
             "customer_uuid": uuids[0] if uuids else None,
-            "customer_status": a.customer_status, "mrr": a.sfdc_mrr,
+            "customer_status": a.customer_status, "plan": plan,
+            "mrr": plan_mrr(snap, a.id, a.sfdc_mrr, plan),
             "implementation_status": a.implementation_status, "csm": a.csm_name,
             "segment": a.account_segment, "renewal_date": _iso(a.renewal_date),
             "website": a.website, "org_id": a.healthie_org_id,
@@ -199,14 +204,25 @@ def parse_addon_filters(items: list[str]) -> dict[str, str]:
     return out
 
 
+def plan_mrr(snap, account_id: str, sfdc_mrr, plan: str | None):
+    """Enterprise: Salesforce MRR (what the SFDC Enterprise report sums); other plans:
+    ChartMogul billing, which is kept current for self-serve customers."""
+    if plan == segments.ENTERPRISE and sfdc_mrr is not None:
+        return sfdc_mrr
+    return data.account_mrr(snap, account_id, sfdc_mrr)
+
+
 def filter_rows(rows: list[dict], paying: bool = True, status: str = "", csm: str = "",
                 segment: str = "", impl: str = "", q: str = "",
                 addon_filters: dict[str, str] | None = None,
-                account_ids: list[str] | None = None) -> list[dict]:
+                account_ids: list[str] | None = None,
+                plan: str = segments.ENTERPRISE) -> list[dict]:
     q = (q or "").strip().lower()
     keep = set(account_ids) if account_ids is not None else None
     out = []
     for r in rows:
+        if not segments.matches(r["plan"], plan):
+            continue
         if paying and not (r["mrr"] or 0) > 0:
             continue
         if status and r["customer_status"] != status:

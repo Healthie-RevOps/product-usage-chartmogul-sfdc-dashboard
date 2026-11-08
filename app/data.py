@@ -16,6 +16,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import desc, func
 
+from app import segments
 from app.db import (
     Activity, Customer, HealthieOrgUsage, ProductMrr, SfdcAccount, SfdcContact, SfdcContract, Subscription,
     SyncRun,
@@ -180,6 +181,7 @@ def _build(session, run_id) -> Snapshot:
                                  if u and u.last_provider_activity else None),
             "hl_clients": u.clients if u else None,
             "hl_active_clients": u.active_clients if u else None,
+            "sfdc_plan": a.current_plan, "has_api": bool(a.has_api_access),
         }
 
     for c in session.query(Customer):
@@ -227,6 +229,29 @@ def _build(session, run_id) -> Snapshot:
                            "former": len(holders) - current, "mrr_cents": mrr, "seats": seats})
     s.products.sort(key=lambda p: (-p["mrr_cents"], -p["current"], p["product"]))
     return s
+
+
+# ------------------------------------------------------------------ plans
+
+def account_plan(snap: Snapshot, account_id: str) -> str | None:
+    """Plan segment for a Salesforce account (app/segments.py). Salesforce "Enterprise"
+    wins, so Enterprise views keep matching the SFDC Enterprise report; otherwise what
+    ChartMogul bills the account's customers today; otherwise Salesforce's plan field."""
+    a = snap.accounts.get(account_id) or {}
+    if segments.from_sfdc(a.get("sfdc_plan")) == segments.ENTERPRISE:
+        return segments.ENTERPRISE
+    products = {sub.product for u in snap.customers_by_account.get(account_id, [])
+                for sub in snap.subs_by_customer.get(u, []) if sub.current}
+    return segments.from_products(products) or segments.from_sfdc(a.get("sfdc_plan"), a.get("has_api"))
+
+
+def account_mrr(snap: Snapshot, account_id: str, sfdc_mrr: float | None) -> float | None:
+    """Monthly revenue in dollars: ChartMogul (billing) when the account has customers there,
+    else Salesforce's MRR field."""
+    uuids = snap.customers_by_account.get(account_id, [])
+    if uuids:
+        return sum(snap.customers[u]["mrr"] for u in uuids if u in snap.customers) / 100
+    return sfdc_mrr
 
 
 # ------------------------------------------------------------------ explorer rows

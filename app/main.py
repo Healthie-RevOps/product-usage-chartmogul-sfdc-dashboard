@@ -1,8 +1,10 @@
 """Dashboard web service. Start command:  uvicorn app.main:app --host 0.0.0.0 --port $PORT"""
 import base64
+import logging
 import binascii
 import csv
 import io
+import json
 import os
 import re
 import secrets
@@ -18,11 +20,13 @@ from sqlalchemy import desc
 from sqlalchemy.orm import selectinload
 from starlette.middleware.sessions import SessionMiddleware
 
-from app import accounts, auth, data, deals, enterprise, quality
+from app import accounts, auth, data, deals, enterprise, quality, segments, stickiness
 from sync import sfdc as sfdc_client
 from app.db import (
     Customer, HealthieOrgUsage, SfdcAccount, SfdcContract, SyncRun, init_db, SessionLocal,
 )
+
+log = logging.getLogger("app")
 
 app = FastAPI(title="Healthie ChartMogul x SFDC", docs_url=None, redoc_url=None,
               openapi_url=None)
@@ -169,7 +173,14 @@ def _home_stats(session) -> dict:
     """One live number per task card on the home page. Each is None until its data exists."""
     snap = data.snapshot(session)
     out = {"products": len(snap.products) or None, "enterprise": None, "win_rate": None,
-           "fixes": None, "never_pitched": None, "ref_missing": None}
+           "fixes": None, "never_pitched": None, "ref_missing": None, "retention": None}
+    try:   # optional on the home page: never let it take the page down
+        built = stickiness.build(session, snap)
+        total = next((x for x in built["summary"] if x["plan"] == segments.ALL), None)
+        if total:
+            out["retention"] = total["logo_retention_12m"]
+    except Exception:
+        log.exception("Retention stats for the home page failed")
     _, acct_rows = accounts.rows(session, snap, paying=True)
     if acct_rows:
         out["ref_missing"] = sum(1 for r in acct_rows if r["values"]["referenceable"] is None)
@@ -231,6 +242,15 @@ def accounts_page(request: Request):
                        for f in accounts.FIELDS],
             "can_edit": accounts.can_edit(auth.current_user(request)),
         }, session)
+    finally:
+        session.close()
+
+
+@app.get("/retention", response_class=HTMLResponse)
+def retention_page(request: Request):
+    session = SessionLocal()
+    try:
+        return _page(request, "retention.html", {"plans": segments.PLANS}, session)
     finally:
         session.close()
 
@@ -490,24 +510,34 @@ class EntSpec(BaseModel):
     q: str = ""
     addons: list[str] = []
     account_ids: list[str] | None = None
+    plan: str = "Enterprise"          # app/segments.py PLANS, or "All plans"
+
+
+ADDON_ROW_LIMIT = 1500      # rows sent to the browser; totals and CSVs cover all of them
 
 
 def _ent_rows(session, s: EntSpec) -> tuple[list[dict], list[dict]]:
     base = enterprise.base_rows(session, data.snapshot(session))
     rows = enterprise.filter_rows(base, s.paying, s.status, s.csm, s.segment, s.impl, s.q,
-                                  enterprise.parse_addon_filters(s.addons), s.account_ids)
+                                  enterprise.parse_addon_filters(s.addons), s.account_ids,
+                                  plan=s.plan)
     return base, rows
 
 
 @app.get("/api/enterprise")
 def api_enterprise(paying: bool = True, status: str = "", csm: str = "", segment: str = "",
-                   impl: str = "", q: str = "", addon: list[str] = Query([])):
+                   impl: str = "", q: str = "", addon: list[str] = Query([]),
+                   plan: str = "Enterprise"):
     session = SessionLocal()
     try:
         base, rows = _ent_rows(session, EntSpec(paying=paying, status=status, csm=csm,
-                                                segment=segment, impl=impl, q=q, addons=addon))
+                                                segment=segment, impl=impl, q=q, addons=addon,
+                                                plan=plan))
         return JSONResponse({"has_data": bool(base), "sync": data.sync_status(session),
-                             "rows": rows, "summary": enterprise.summary(rows),
+                             "rows": rows[:ADDON_ROW_LIMIT], "total_rows": len(rows),
+                             "row_limit": ADDON_ROW_LIMIT,
+                             "plans": segments.PLANS + [segments.ALL],
+                             "summary": enterprise.summary(rows),
                              "totals": enterprise.totals(rows), "facets": enterprise.facets(base),
                              "addons": [{"key": a["key"], "label": a["label"]}
                                         for a in enterprise.ADDONS]})
@@ -599,22 +629,28 @@ class AcctSpec(BaseModel):
     field: str = ""
     is_: str = ""
     account_ids: list[str] | None = None
+    plan: str = "Enterprise"
 
 
 def _acct_rows(session, s: AcctSpec):
     return accounts.rows(session, data.snapshot(session), s.paying, s.status, s.csm, s.segment,
-                         s.impl, s.q, s.field, s.is_, s.account_ids)
+                         s.impl, s.q, s.field, s.is_, s.account_ids, plan=s.plan)
 
 
 @app.get("/api/accounts")
 def api_accounts(request: Request, paying: bool = True, status: str = "", csm: str = "",
-                 segment: str = "", impl: str = "", q: str = "", field: str = "", is_: str = Query("", alias="is")):
+                 segment: str = "", impl: str = "", q: str = "", field: str = "",
+                 is_: str = Query("", alias="is"), plan: str = "Enterprise"):
     session = SessionLocal()
     try:
         base, rows = _acct_rows(session, AcctSpec(paying=paying, status=status, csm=csm,
-                                                  segment=segment, impl=impl, q=q, field=field, is_=is_))
+                                                  segment=segment, impl=impl, q=q, field=field,
+                                                  is_=is_, plan=plan))
         return JSONResponse({"has_data": bool(base), "sync": data.sync_status(session),
-                             "rows": rows, "summary": accounts.summary(rows),
+                             "rows": rows[:ADDON_ROW_LIMIT], "total_rows": len(rows),
+                             "row_limit": ADDON_ROW_LIMIT,
+                             "plans": segments.PLANS + [segments.ALL],
+                             "summary": accounts.summary(rows),
                              "facets": enterprise.facets(base),
                              "can_edit": accounts.can_edit(auth.current_user(request))})
     finally:
@@ -677,6 +713,63 @@ def export_accounts(spec: str = Form("{}")):
              + [r["missing"], r["id"], f"{LIGHTNING_BASE}/lightning/r/Account/{r['id']}/view"]
              for r in rows),
             f"enterprise_accounts_{date.today().isoformat()}.csv")
+    finally:
+        session.close()
+
+
+# ---------------------------------------------------------------- retention / stickiness
+
+LIST_LIMIT = 1000
+
+
+@app.get("/api/retention")
+def api_retention(plan: str = segments.ALL):
+    session = SessionLocal()
+    try:
+        snap = data.snapshot(session)
+        built = stickiness.build(session, snap)
+        plan = plan if plan in segments.PLANS else segments.ALL
+        risk = stickiness.at_risk(snap, built, plan)
+        gone = stickiness.churned(built, plan)
+        return JSONResponse({
+            "has_data": bool(built["custs"]), "sync": data.sync_status(session),
+            "summary": built["summary"], "trend": built["trend"], "plans": segments.PLANS,
+            "at_risk": risk[:LIST_LIMIT], "at_risk_total": len(risk),
+            "churned": gone[:LIST_LIMIT], "churned_total": len(gone),
+            "inactive_days": stickiness.INACTIVE_DAYS,
+        })
+    finally:
+        session.close()
+
+
+@app.post("/export/retention.csv")
+def export_retention(spec: str = Form("{}")):
+    """kind = at_risk (paying, not using) | churned (left in the last 90 days)."""
+    try:
+        s = json.loads(spec or "{}")
+    except ValueError as exc:
+        raise HTTPException(400, f"Bad selection: {exc}")
+    plan = s.get("plan") if s.get("plan") in segments.PLANS else segments.ALL
+    session = SessionLocal()
+    try:
+        snap = data.snapshot(session)
+        built = stickiness.build(session, snap)
+        if s.get("kind") == "churned":
+            rows = stickiness.churned(built, plan)
+            return _csv_response(
+                ["customer", "plan_90_days_ago", "mrr_lost_usd", "ended", "tenure_months",
+                 "chartmogul_uuid", "sfdc_account_id"],
+                ([r["name"], r["plan"], r["mrr_lost"] / 100, r["ended"], r["tenure_months"],
+                  r["uuid"], r["account_id"]] for r in rows),
+                f"churned_90d_{date.today().isoformat()}.csv")
+        rows = stickiness.at_risk(snap, built, plan)
+        return _csv_response(
+            ["customer", "plan", "mrr_usd", "active_providers", "providers", "last_provider_activity",
+             "active_clients", "tenure_months", "owner", "chartmogul_uuid", "sfdc_account_id"],
+            ([r["name"], r["plan"], r["mrr"] / 100, r["active_providers"], r["providers"],
+              r["last_activity"], r["active_clients"], r["tenure_months"], r["owner"], r["uuid"],
+              r["account_id"]] for r in rows),
+            f"paying_not_using_{date.today().isoformat()}.csv")
     finally:
         session.close()
 

@@ -129,7 +129,7 @@ def _build_mismatches(session, snap) -> list[dict]:
     """Enterprise accounts matched to ChartMogul where a flag and billing disagree."""
     out = []
     for r in enterprise.base_rows(session, snap):
-        if not r["customer_uuid"]:
+        if r["plan"] != "Enterprise" or not r["customer_uuid"]:
             continue  # nothing to compare against
         live = set()
         for u in snap.customers_by_account.get(r["id"], []):
