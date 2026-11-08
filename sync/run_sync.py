@@ -8,7 +8,10 @@
      (not all ~212k accounts with a Stripe ID).
   3. Match, then contacts + closed-won contracts for matched accounts.
   4. Healthie org usage from Metabase (sync/metabase.py), if configured. Separate
-     transaction, non-fatal.
+     transaction, non-fatal, and runs even if steps 1-3 failed.
+
+If ChartMogul is unavailable, steps 1-3 are retried once after 30 min
+(SYNC_SNAPSHOT_ATTEMPTS / SYNC_SNAPSHOT_RETRY_WAIT_S).
 
 Match waterfall (recorded per customer as match_method):
   1. stripe_id — ChartMogul external_id (cus_...) == Account.Stripe_Customer_ID__c
@@ -41,6 +44,9 @@ CUSTOMER_STATUSES = [s.strip() for s in
                      os.environ.get("CM_CUSTOMER_STATUSES", "Active,Cancelled").split(",") if s.strip()]
 PRODUCT_FILTER = {p.strip().lower() for p in
                   os.environ.get("CM_PRODUCT_FILTER", "").split(",") if p.strip()}
+# Whole-snapshot retries when ChartMogul is down (see _snapshot_with_retry)
+SNAPSHOT_ATTEMPTS = int(os.environ.get("SYNC_SNAPSHOT_ATTEMPTS", "2"))
+SNAPSHOT_RETRY_WAIT_S = int(os.environ.get("SYNC_SNAPSHOT_RETRY_WAIT_S", "1800"))
 
 
 def _dt(value):
@@ -252,6 +258,45 @@ def sync_sfdc_details(session) -> tuple[int, int]:
     return n_contacts, n_contracts
 
 
+def _snapshot(run_id: int) -> None:
+    """ChartMogul + SFDC in one transaction: all or nothing, so the dashboard keeps
+    serving the previous snapshot if any step fails."""
+    with session_scope() as session:
+        _clear(session)
+        plans = list(cm.iter_plans())
+        log.info("Listed %d ChartMogul plans", len(plans))
+        n_cust, n_sub, _ = sync_chartmogul(session, plans)
+        sync_product_mrr(session, plans)
+        n_acct = sync_sfdc_accounts(session)
+        n_match, n_unmatch = match(session)
+        session.flush()
+        n_contact, n_contract = sync_sfdc_details(session)
+        run = session.get(SyncRun, run_id)
+        run.status = "success"
+        run.finished_at = datetime.now(timezone.utc)
+        run.accounts_synced, run.contacts_synced = n_acct, n_contact
+        run.contracts_synced = n_contract
+        run.customers_synced, run.subscriptions_synced = n_cust, n_sub
+        run.matched, run.unmatched = n_match, n_unmatch
+
+
+def _snapshot_with_retry(run_id: int) -> None:
+    """ChartMogul's API has timed out for 20+ minutes at a stretch (every night at
+    09:00 UTC in early Nov 2026, fine an hour later). Retry the whole snapshot after a
+    wait, only for those transient ChartMogul errors; anything else fails right away."""
+    for attempt in range(1, SNAPSHOT_ATTEMPTS + 1):
+        try:
+            _snapshot(run_id)
+            return
+        except cm.ChartMogulTransientError as exc:
+            if attempt == SNAPSHOT_ATTEMPTS:
+                raise
+            log.warning("ChartMogul unavailable (%s); retrying the snapshot in %d min "
+                        "(attempt %d of %d)", exc, SNAPSHOT_RETRY_WAIT_S // 60,
+                        attempt + 1, SNAPSHOT_ATTEMPTS)
+            time.sleep(SNAPSHOT_RETRY_WAIT_S)
+
+
 def main():
     init_db()
     with session_scope() as session:
@@ -260,40 +305,28 @@ def main():
         session.flush()
         run_id = run.id
 
+    failed = False
     try:
-        with session_scope() as session:
-            _clear(session)
-            plans = list(cm.iter_plans())
-            log.info("Listed %d ChartMogul plans", len(plans))
-            n_cust, n_sub, _ = sync_chartmogul(session, plans)
-            sync_product_mrr(session, plans)
-            n_acct = sync_sfdc_accounts(session)
-            n_match, n_unmatch = match(session)
-            session.flush()
-            n_contact, n_contract = sync_sfdc_details(session)
-            run = session.get(SyncRun, run_id)
-            run.status = "success"
-            run.finished_at = datetime.now(timezone.utc)
-            run.accounts_synced, run.contacts_synced = n_acct, n_contact
-            run.contracts_synced = n_contract
-            run.customers_synced, run.subscriptions_synced = n_cust, n_sub
-            run.matched, run.unmatched = n_match, n_unmatch
+        _snapshot_with_retry(run_id)
         log.info("Sync complete")
     except Exception as exc:
+        failed = True
         log.exception("Sync failed")
         with session_scope() as session:
             run = session.get(SyncRun, run_id)
             run.status = "failed"
             run.finished_at = datetime.now(timezone.utc)
             run.error = str(exc)[:4000]
-        sys.exit(1)
 
-    # Healthie product usage (Metabase). Own transaction; a failure here is logged but
-    # never fails the ChartMogul/SFDC snapshot, and the previous usage data stays.
+    # Healthie product usage (Metabase). Independent of ChartMogul/SFDC, so it runs even
+    # when the snapshot failed. Own transaction; on failure the previous data stays.
     try:
         metabase.sync_org_usage()
     except Exception:
         log.exception("Metabase org usage sync failed; keeping previous data")
+
+    if failed:
+        sys.exit(1)  # after Metabase, so the cron run still shows as failed
 
 
 if __name__ == "__main__":
