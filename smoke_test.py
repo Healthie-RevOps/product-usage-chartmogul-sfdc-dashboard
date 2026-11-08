@@ -394,6 +394,10 @@ check("loss reason prefixes become their own field",
       [dl.norm_reason(x) for x in ("NR: Timing", "Timing", "R: Lost to Competitor - Price", "Product  Issues")],
       [("Timing", "non-regrettable"), ("Timing", None), ("Lost to Competitor - Price", "regrettable"),
        ("Product Issues", None)])
+check("'None (Healthie User)' answers the question; 'Other / Unknown' doesn't",
+      (dl.competitor_answered(SfdcOpportunity(competitor="None (Healthie User)")),
+       dl.competitor_answered(SfdcOpportunity(competitor="Other / Unknown")),
+       dl.competitor_answered(SfdcOpportunity())), (True, False, False))
 check("primary competitor falls back to free text, first name",
       (dl.primary_competitor(SfdcOpportunity(competitor="Other / Unknown", competition="Athena, eClinicalWorks")),
        dl.primary_competitor(SfdcOpportunity(competitor="Not Applicable"))), ("athenahealth", None))
@@ -439,6 +443,47 @@ d3 = client.get(f"/api/deals?record_type={ISO}&outcome=lost&reason=Timing").json
 check("outcome + reason filters", sorted(x["name"] for x in d3["rows"]), ["P3", "P4"])
 rows = csv_rows(client.post("/export/deals.csv", data=spec(record_type=ISO, outcome="won")))
 check("deals CSV follows filters", [(x["deal"], x["competitor"], x["why_won"]) for x in rows], [("P1", "Canvas", "API")])
+
+print("\ndata quality:")
+with session_scope() as s:
+    base = dict(account_id=ENT_ACCT, account_name="Ent Co")
+    s.add(SfdcOpportunity(id="006Q1", name="Ent Co - Scribe upsell", record_type="Expansion Deal",
+                          opp_type="Add-on", stage="Closed Lost", is_closed=True, is_won=False,
+                          close_date=date(2026, 6, 1), owner_name="Rita Rep", **base))
+    s.add(SfdcOpportunity(id="006Q2", name="Newco", record_type=ISO, stage="Closed Won", is_closed=True,
+                          is_won=True, close_date=date(2026, 7, 1), competitor="Canvas",
+                          owner_name="Rita Rep", **base))
+    s.add(SfdcOpportunity(id="006Q3", name="Stale Co", record_type=ISO, stage="Discovery", is_closed=False,
+                          is_won=False, close_date=date(2026, 1, 15), owner_name="Omar Owner", **base))
+    s.add(SyncRun(finished_at=datetime.now(), status="success"))
+r = client.get("/quality")
+check("data quality page renders", (r.status_code, "Data quality" in r.text), (200, True))
+dq = client.get("/api/quality?date_from=2026-01-01").json()
+work = {x["name"]: x for x in dq["rows"]}
+check("add-on lost deal: no add-on reason + no Expansion Product, with a suggestion",
+      (sorted(work["Ent Co - Scribe upsell"]["issues"]), work["Ent Co - Scribe upsell"]["hints"].get("expansion_product")),
+      (["missing_addon_reason", "missing_expansion_product"], "AI Scribe"))
+check("won deal without Year 1 ACV", work["Newco"]["issues"], ["missing_acv"])
+check("open deal past its close date", (work["Stale Co"]["issues"], work["Stale Co"]["hints"]["days_overdue"] > 0),
+      (["stale_open"], True))
+check("clean deals are not on the worklist", "P1" in work, False)
+check("date filter keeps 2024 deals out", "P5 old" in work, False)
+summ = {x["key"]: x for x in dq["summary"]}
+check("rule summary counts and eligibility", (summ["missing_acv"]["count"], summ["missing_acv"]["eligible"]), (1, 2))
+check("flag mismatch: API flag set, not billed in ChartMogul",
+      [(m["account"], m["addon"], m["problem"]) for m in dq["mismatches"]],
+      [("Ent Co", "API access", "Flag is set, but no live ChartMogul subscription")])
+own = {o["owner"]: o for o in dq["owners"]}
+check("by owner", (own["Rita Rep"]["total"], own["Omar Owner"]["counts"]), (3, {"stale_open": 1}))
+dq2 = client.get("/api/quality?date_from=2026-01-01&owner=Omar+Owner").json()
+check("owner filter", ([x["name"] for x in dq2["rows"]], dq2["mismatches"]), (["Stale Co"], []))
+dq3 = client.get("/api/quality?date_from=2026-01-01&issue=missing_acv").json()
+check("issue filter", [x["name"] for x in dq3["rows"]], ["Newco"])
+rows = csv_rows(client.post("/export/quality.csv", data=spec(date_from="2026-01-01", owner="Rita Rep")))
+check("fix list CSV: one row per fix, with suggestion",
+      sorted((x["issue"], x["fix"]) for x in rows),
+      [("No Expansion Product", "Set Expansion Product (looks like: AI Scribe)"),
+       ("No add-on loss reason", "Set Add-On Close Lost Reason"), ("Won, no Year 1 ACV", "Set Year 1 ACV")])
 
 print("\nfails closed (no SESSION_SECRET, no insecure override):")
 os.environ.pop("ALLOW_INSECURE_NO_AUTH")

@@ -179,6 +179,7 @@ def _build(session, snap) -> list[dict]:
             "active_users": stats.get("active_users"),
             "flags": {col: bool(getattr(a, col)) for col in (
                 "has_active_client", "has_standard_seats", "has_support_seats")},
+            "addon_flags": {ad["key"]: bool(getattr(a, ad["flag"])) for ad in ADDONS if ad["flag"]},
             "addons": {ad["key"]: _cell(ad, a, cm.get(ad["key"], []),
                                         by_addon.get(ad["key"], []), today) for ad in ADDONS},
         })

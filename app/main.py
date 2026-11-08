@@ -18,7 +18,7 @@ from sqlalchemy import desc
 from sqlalchemy.orm import selectinload
 from starlette.middleware.sessions import SessionMiddleware
 
-from app import auth, data, deals, enterprise
+from app import auth, data, deals, enterprise, quality
 from app.db import (
     Customer, HealthieOrgUsage, SfdcAccount, SfdcContract, SyncRun, init_db, SessionLocal,
 )
@@ -194,6 +194,15 @@ def deals_page(request: Request):
     session = SessionLocal()
     try:
         return _page(request, "deals.html", {}, session)
+    finally:
+        session.close()
+
+
+@app.get("/quality", response_class=HTMLResponse)
+def quality_page(request: Request):
+    session = SessionLocal()
+    try:
+        return _page(request, "quality.html", {"rules": quality.RULES}, session)
     finally:
         session.close()
 
@@ -596,6 +605,89 @@ def export_deals(spec: str = Form("{}")):
               r["situation"], r["owner"], r["id"],
               f"{LIGHTNING_BASE}/lightning/r/Opportunity/{r['id']}/view"] for r in rows),
             f"deals_{date.today().isoformat()}.csv")
+    finally:
+        session.close()
+
+
+# ---------------------------------------------------------------- data quality
+
+class QualitySpec(BaseModel):
+    date_from: str = ""
+    owner: str = ""
+    issue: str = ""
+    q: str = ""
+
+
+def _quality(session, s: QualitySpec):
+    deal_base, mismatch_base = quality.base(session, data.snapshot(session))
+    scoped = quality.filter_deals(deal_base, s.date_from, s.owner, "", s.q)
+    mism = quality.filter_mismatches(mismatch_base, s.owner, s.q)
+    issue = s.issue if s.issue in quality.RULE_KEYS else ""
+    work = [r for r in scoped if r["issues"] and (not issue or issue in r["issues"])]
+    if issue and issue != "flag_mismatch":
+        mism_shown = []
+    else:
+        mism_shown = mism
+    if issue == "flag_mismatch":
+        work = []
+    return deal_base, mismatch_base, scoped, mism, work, mism_shown
+
+
+QUALITY_ROW_LIMIT = 1500
+
+
+@app.get("/api/quality")
+def api_quality(date_from: str = "", owner: str = "", issue: str = "", q: str = ""):
+    session = SessionLocal()
+    try:
+        deal_base, mismatch_base, scoped, mism, work, mism_shown = _quality(
+            session, QualitySpec(date_from=date_from, owner=owner, issue=issue, q=q))
+        owners = sorted({r["owner"] for r in deal_base if r["owner"]}
+                        | {m["csm"] for m in mismatch_base if m["csm"]}, key=str.lower)
+        return JSONResponse({
+            "summary": quality.rule_summary(scoped, mism), "owners": quality.by_owner(scoped),
+            "rows": work[:QUALITY_ROW_LIMIT], "total_rows": len(work), "limit": QUALITY_ROW_LIMIT,
+            "mismatches": mism_shown, "facets": {"owner": owners},
+        })
+    finally:
+        session.close()
+
+
+@app.post("/export/quality.csv")
+def export_quality(spec: str = Form("{}")):
+    """One row per (deal, issue) plus one per account flag mismatch: a fix list to send
+    to owners."""
+    try:
+        s = QualitySpec.model_validate_json(spec or "{}")
+    except ValueError as exc:
+        raise HTTPException(400, f"Bad selection: {exc}")
+    session = SessionLocal()
+    try:
+        *_, work, mism_shown = _quality(session, s)
+        rules = {r["key"]: r for r in quality.RULES}
+        wanted = s.issue if s.issue in quality.RULE_KEYS else ""
+
+        def lines():
+            for r in work:
+                for i in r["issues"]:
+                    if wanted and i != wanted:
+                        continue
+                    fix = rules[i]["fix"]
+                    if i == "missing_expansion_product" and r["hints"].get("expansion_product"):
+                        fix += f" (looks like: {r['hints']['expansion_product']})"
+                    yield [r["owner"], rules[i]["label"], fix, r["name"], r["account"],
+                           r["record_type"], r["stage"], r["close_date"],
+                           f"{LIGHTNING_BASE}/lightning/r/Opportunity/{r['id']}/view"]
+            for m in mism_shown:
+                yield [m["csm"], rules["flag_mismatch"]["label"],
+                       f"{m['problem']}: {m['addon']}"
+                       + (f" ({', '.join(m['products'])})" if m["products"] else ""),
+                       "", m["account"], "", "", "",
+                       f"{LIGHTNING_BASE}/lightning/r/Account/{m['account_id']}/view"]
+
+        return _csv_response(["owner", "issue", "fix", "deal", "account", "record_type", "stage",
+                              "close_date", "sfdc_url"], lines(),
+                             f"data_quality_{date.today().isoformat()}.csv")
     finally:
         session.close()
 
