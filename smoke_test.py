@@ -296,6 +296,93 @@ r = client.post("/export/customers.csv", data=spec(products=["Group Plan"], view
 check("customers CSV honours selection", [x["customer"] for x in csv_rows(r)], ["Multi Co"])
 check("bad spec -> 400", client.post("/export/customers.csv", data={"spec": "{nope"}).status_code, 400)
 
+print("\nenterprise add-ons:")
+from app import enterprise as ent  # noqa: E402
+from app.db import SfdcOpportunity  # noqa: E402
+
+ENT_ACCT, ENT_CUST, PROSPECT = "001000000000009AAA", "cus_uuid_ent", "001000000000010AAA"
+with session_scope() as s:
+    s.add(SfdcAccount(id=ENT_ACCT, name="Ent Co | Org Id: 777", stripe_customer_id="cus_ent",
+                      healthie_org_id="777", current_plan="Enterprise", customer_status="Customer",
+                      sfdc_mrr=4000, csm_name="Casey CSM", account_segment="Strategic",
+                      implementation_status="Live", has_api_access=True))
+    s.add(Customer(cm_uuid=ENT_CUST, name="Ent billing", status="Active", mrr_cents=400000,
+                   stripe_customer_id="cus_ent", sfdc_account_id=ENT_ACCT, match_method="stripe_id"))
+    s.add(Subscription(cm_uuid="sub_ent_vis", customer_uuid=ENT_CUST, plan_name="Visualize+ Lite",
+                       product="Visualize+ Lite", is_current=True, status="active", quantity=1,
+                       mrr_cents=50000, start_date=datetime(2026, 1, 1)))
+    # unmatched, non-paying Enterprise account (only in "All Enterprise")
+    s.add(SfdcAccount(id=PROSPECT, name="Prospect Ent", current_plan="Enterprise", sfdc_mrr=0))
+    opp = dict(account_id=ENT_ACCT, account_name="Ent Co")
+    s.add(SfdcOpportunity(id="006E1", name="Ent Co - Bridge add-on", stage="Negotiation",
+                          is_closed=False, is_won=False, close_date=date(2026, 12, 15),
+                          amount=5000, **opp))
+    s.add(SfdcOpportunity(id="006E2", name="Ent Co - AI scribe expansion", stage="Closed Lost",
+                          is_closed=True, is_won=False, close_date=date(2026, 5, 1),
+                          addon_loss_reason="Pricing Sensitivity", revisit_date=date(2027, 1, 1),
+                          competitor_text="Freed", **opp))
+    s.add(SfdcOpportunity(id="006E3", name="Ent Co - Upgrade", expansion_product="Full Web White Label & Customizations",
+                          stage="Closed Won", is_closed=True, is_won=True, close_date=date(2024, 2, 1), **opp))
+    s.add(SfdcOpportunity(id="006E4", name="Ent Co semi-whitelabel", stage="Discovery",
+                          is_closed=False, is_won=False, close_date=date(2027, 2, 1), **opp))
+    ct = dict(account_id=ENT_ACCT, user_active=True)
+    s.add(SfdcContact(id="003E1", name="Pat Provider", email="pat@ent.test", user_type="Standard",
+                      title='=HYPERLINK("http://x")', **ct))
+    s.add(SfdcContact(id="003E2", name="Ada Admin", email="ada@ent.test", is_org_admin=True, **ct))
+    s.add(SfdcContact(id="003E3", name="Sam Support", email="sam@ent.test", user_type="Support", **ct))
+    s.add(SfdcContact(id="003E4", name="Opted Out", email="out@ent.test", user_type="Standard",
+                      email_opt_out=True, **ct))
+    s.add(SfdcContact(id="003E5", name="No Email", user_type="Standard", **ct))
+    s.add(SfdcContact(id="003E6", name="Inactive Provider", email="old@ent.test", user_type="Standard",
+                      account_id=ENT_ACCT, user_active=False))
+    s.add(SyncRun(finished_at=datetime.now(), status="success"))  # new snapshot key
+
+check("detect: Expansion_Product__c wins over name",
+      ent.detect_addons(SfdcOpportunity(name="Scribe deal", expansion_product="Bridge")), {"bridge"})
+check("detect: several add-ons in one name",
+      ent.detect_addons(SfdcOpportunity(name="Acme - Scribe + Bridge + Vis+")),
+      {"ai_scribe", "bridge", "visualize"})
+check("detect: 'white label' -> full, 'semi white label' -> semi only",
+      (ent.detect_addons(SfdcOpportunity(name="Acme white label")),
+       ent.detect_addons(SfdcOpportunity(name="Acme Semi White Label"))), ({"full_wl"}, {"semi_wl"}))
+r = client.get("/enterprise")
+check("enterprise page renders", (r.status_code, "Enterprise add-ons" in r.text), (200, True))
+ex = client.get("/api/enterprise").json()
+check("paying only by default", [x["name"] for x in ex["rows"]], ["Ent Co"])
+cells = {k: v["state"] for k, v in ex["rows"][0]["addons"].items()}
+check("states: flag / ChartMogul / open / lost / old win / never",
+      (cells["api"], cells["visualize"], cells["bridge"], cells["ai_scribe"], cells["full_wl"],
+       cells["semi_wl"], cells["zoom"]),
+      ("has", "has", "pipeline", "lost", "none", "pipeline", "none"))
+sc = ex["rows"][0]["addons"]["ai_scribe"]
+check("lost cell carries reason, revisit date, competitor",
+      (sc["reason"], sc["revisit_date"], sc["competitor"]), ("Pricing Sensitivity", "2027-01-01", "Freed"))
+check("old won deal no longer billed is noted", ex["rows"][0]["addons"]["full_wl"].get("note"),
+      "Won 2024-02-01, not billed now")
+summ = {x["key"]: x["counts"] for x in ex["summary"]}
+check("summary counts", (summ["bridge"]["pipeline"], summ["ai_scribe"]["lost"], summ["zoom"]["none"]),
+      (1, 1, 1))
+ex = client.get("/api/enterprise?paying=false").json()
+check("all Enterprise includes unmatched non-paying", sorted(x["name"] for x in ex["rows"]),
+      ["Ent Co", "Prospect Ent"])
+ex = client.get("/api/enterprise?paying=false&addon=bridge:none").json()
+check("add-on state filter", [x["name"] for x in ex["rows"]], ["Prospect Ent"])
+ex = client.get("/api/enterprise?paying=false&addon=api:not_has&addon=bogus:none").json()
+check("not_has filter; unknown add-on ignored", [x["name"] for x in ex["rows"]], ["Prospect Ent"])
+check("facets for dropdowns", client.get("/api/enterprise").json()["facets"]["csm"], ["Casey CSM"])
+rows = csv_rows(client.post("/export/enterprise.csv", data=spec(paying=False, addons=["bridge:pipeline"])))
+check("accounts CSV follows filters", [(x["account"], x["bridge_state"], x["ai_scribe_detail"]) for x in rows],
+      [("Ent Co", "pipeline", "Pricing Sensitivity, 2026-05-01")])
+rows = csv_rows(client.post("/export/enterprise-contacts.csv", data=spec()))
+check("contacts CSV: active providers + admins only, no support/opted-out/no-email",
+      sorted((x["name"], x["role"]) for x in rows), [("Ada Admin", "admin"), ("Pat Provider", "provider")])
+check("contacts CSV neutralizes spreadsheet formulas",
+      next(x["title"] for x in rows if x["name"] == "Pat Provider"), '\'=HYPERLINK("http://x")')
+rows = csv_rows(client.post("/export/enterprise-contacts.csv", data=spec(account_ids=[PROSPECT], paying=False)))
+check("contacts CSV narrows to selected accounts", rows, [])
+check("CSV guard leaves phone numbers alone", (main._csv_cell("+1 555-0100"), main._csv_cell("-3"),
+                                                main._csv_cell("@SUM(A1)")), ("+1 555-0100", "-3", "'@SUM(A1)"))
+
 print("\nfails closed (no SESSION_SECRET, no insecure override):")
 os.environ.pop("ALLOW_INSECURE_NO_AUTH")
 check("/ -> 503", client.get("/").status_code, 503)

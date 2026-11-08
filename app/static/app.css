@@ -220,3 +220,42 @@ td.date, th.date { white-space: nowrap; }
 .login-card h1 { font-size: 22px; margin: 18px 0 6px; }
 .login-card .g_id_signin { display: flex; justify-content: center; margin: 20px 0 4px; }
 .login-card .error { color: var(--danger); }
+
+/* ---- enterprise add-ons ----
+ * State colours (validated categorical order, see dataviz check): has = series-1,
+ * pipeline = series-2, lost = series-3, not pitched = neutral track. Every state also
+ * carries a text label, so colour is never the only cue. */
+.st-has { --st: var(--series-1); }
+.st-pipeline { --st: var(--series-2); }
+.st-lost { --st: var(--series-3); }
+.st-none { --st: var(--grid); }
+.legend i.st-swatch { background: var(--st); }
+.segbar { display: flex; gap: 2px; height: 8px; border-radius: 999px; overflow: hidden;
+  background: transparent; min-width: 120px; margin-top: 6px; }
+.segbar span { background: var(--st); border-radius: 999px; min-width: 3px; }
+.countbtn { border: 1px solid transparent; background: none; border-radius: 999px; padding: 2px 9px;
+  font-weight: 700; cursor: pointer; font-variant-numeric: tabular-nums; color: var(--navy); }
+.countbtn:hover:not(:disabled) { border-color: var(--purple); }
+.countbtn[aria-pressed=true] { background: var(--purple); color: #fff; }
+.countbtn:disabled { color: var(--ink-muted); cursor: default; font-weight: 500; }
+table.adoption td { vertical-align: middle; }
+table.adoption .strong { font-weight: 700; }
+table.matrix th.addon { white-space: normal; min-width: 92px; max-width: 110px; line-height: 1.25; }
+table.matrix td.acct { min-width: 220px; }
+table.matrix td.cell { padding: 6px 6px; }
+.st { display: inline-flex; align-items: center; gap: 5px; max-width: 128px; font-size: 12px;
+  font-weight: 600; color: var(--slate); white-space: nowrap; }
+.st i { width: 8px; height: 8px; border-radius: 50%; background: var(--st); flex: none; }
+.st-text { overflow: hidden; text-overflow: ellipsis; }
+.st.st-none { color: var(--ink-muted); font-weight: 500; }
+a.st:hover { text-decoration: underline; }
+.st-flag { color: var(--muted); font-size: 11px; }
+/* keep the account visible while scrolling across add-on columns */
+table.matrix th.check, table.matrix td.check { position: sticky; left: 0; z-index: 2; background: #fff; }
+table.matrix th:nth-child(2), table.matrix td.acct { position: sticky; left: 30px; z-index: 2; background: #fff;
+  box-shadow: 1px 0 0 var(--line); }
+table.matrix thead th.check, table.matrix thead th:nth-child(2) { z-index: 3; }
+table.matrix tr:hover td.check, table.matrix tr:hover td.acct { background: #FAFAFD; }
+table.matrix tr.selected td.check, table.matrix tr.selected td.acct { background: var(--purple-tint); }
+table.matrix th.check, table.matrix td.check { width: 30px; min-width: 30px; max-width: 30px;
+  padding: 8px 0 8px 8px; }
