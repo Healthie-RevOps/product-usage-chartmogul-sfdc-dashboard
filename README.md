@@ -193,6 +193,16 @@ ALLOW_INSECURE_NO_AUTH=1 uvicorn app.main:app --reload   # skip Google sign-in l
 - `/product/users.csv?product=…&view=…`: full active-user export for that product
 - `/customer/{cm_uuid}`: products, usage figures, contracts, contacts with active-user flag
 - `/`: customer list with search / product / status / match filters
+- `/enterprise`: Enterprise add-on adoption. One row per Enterprise SFDC account, one column per
+  add-on (AI Scribe, Bridge, Visualize+, API, E-Rx, full/semi white label, sub-orgs, Zoom,
+  HubSpot, Shopify), each cell **Has it / In pipeline / Lost / Not pitched**. Replaces the SFDC
+  reports Enterprise Customer Attribute Reporting, Scribe/Bridge/Vis+ Open Opportunities, and
+  Add-On Closed Lost. Logic in `app/enterprise.py`:
+  - *Has it*: SFDC `Stripe_Has_*` flag, or a live ChartMogul subscription to the add-on's
+    product (Bridge and Visualize+ have no SFDC flag), or a deal won in the last 120 days.
+  - Deal -> add-on: `Expansion_Product__c` when set, else patterns over the opp name/product text.
+  - CSVs: accounts with every add-on state, and **providers & admins** at those accounts (active
+    Healthie users with a Standard seat or owner/admin role, with an email, not opted out).
 
 ## JSON API (for other tooling / Claude skills)
 

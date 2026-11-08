@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}Enterprise add-ons{% endblock %}
+{% block nav_enterprise %}active{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <h1>Enterprise add-ons</h1>
+  <span class="sub">For each add-on: which Enterprise accounts have it, are being pitched it, said no, or were never pitched.</span>
+</div>
+
+<div class="filters" role="search">
+  <div class="seg" role="group" aria-label="Which Enterprise accounts" id="paying-seg">
+    <button data-paying="1" aria-pressed="true" title="Enterprise plan with Salesforce MRR above $0 (same as the Salesforce report)">Paying</button>
+    <button data-paying="0" aria-pressed="false">All Enterprise</button>
+  </div>
+  <select id="f-status" aria-label="Customer status"><option value="">Any customer status</option></select>
+  <select id="f-csm" aria-label="CSM"><option value="">Any CSM</option></select>
+  <select id="f-segment" aria-label="Segment"><option value="">Any segment</option></select>
+  <select id="f-impl" aria-label="Implementation status"><option value="">Any implementation status</option></select>
+  <input type="search" id="f-q" placeholder="Search accounts…" autocomplete="off">
+  <button class="linklike" id="f-clear" hidden>Clear filters</button>
+</div>
+<div class="chips" id="addon-chips" style="margin:-4px 0 14px"></div>
+
+<div class="kpis" id="kpis"></div>
+
+<section class="card" id="summary-card">
+  <div class="card-head">
+    <h2>Add-on adoption</h2>
+    <span class="spacer"></span>
+    <div class="legend" id="state-legend" style="margin:0"></div>
+  </div>
+  <div class="table-wrap" style="max-height:none">
+    <table class="data adoption">
+      <thead><tr>
+        <th>Add-on</th>
+        <th style="width:34%">Accounts in view</th>
+        <th class="num">Has it</th>
+        <th class="num">In pipeline</th>
+        <th class="num">Lost</th>
+        <th class="num">Not pitched</th>
+        <th class="num">Open pipeline</th>
+      </tr></thead>
+      <tbody id="summary-body"></tbody>
+    </table>
+  </div>
+  <div class="note-line">Click a count to filter the accounts below; click it again to clear. “Has it” = Salesforce add-on flag, or a live ChartMogul subscription to the add-on (Bridge and Visualize+ have no Salesforce flag), or a deal won in the last 120 days.</div>
+</section>
+
+<section class="card" id="matrix-card">
+  <div class="card-head">
+    <h2>Accounts <span class="count" id="acct-count">0</span></h2>
+    <span class="spacer"></span>
+    <button class="btn small" id="export-accounts" title="Accounts in view (or the selected ones), with every add-on's state">↓ Accounts CSV</button>
+    <button class="btn small primary" id="export-contacts" title="Active providers, owners and admins at these accounts, with an email, not opted out of email">↓ Providers &amp; admins CSV</button>
+  </div>
+  <div class="table-wrap" id="matrix-wrap">
+    <table class="data matrix" id="matrix">
+      <thead><tr id="matrix-head"></tr></thead>
+      <tbody id="matrix-body"></tbody>
+    </table>
+  </div>
+  <div class="note-line">Hover a cell for details; click an open or lost cell to open the deal in Salesforce. Add-on deals are found by the deal's Expansion Product, else by its name (e.g. “Scribe”, “Bridge”, “white label”).</div>
+</section>
+
+<div class="selbar" id="selbar" hidden>
+  <span id="selbar-text"></span>
+  <button class="btn small" id="selbar-clear">Clear</button>
+  <button class="btn small" id="selbar-accounts">↓ Accounts CSV</button>
+  <button class="btn small primary" id="selbar-contacts">↓ Their providers &amp; admins</button>
+</div>
+
+<form id="export-form" method="post" hidden><input type="hidden" name="spec" id="export-spec"></form>
+<script id="addons-data" type="application/json">{{ addons|tojson }}</script>
+<script>window.LIGHTNING_BASE = {{ lightning_base|tojson }};</script>
+{% endblock %}
+
+{% block scripts %}<script src="/static/enterprise.js?v=1"></script>{% endblock %}

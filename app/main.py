@@ -4,6 +4,7 @@ import binascii
 import csv
 import io
 import os
+import re
 import secrets
 from datetime import date
 from urllib.parse import quote
@@ -17,7 +18,7 @@ from sqlalchemy import desc
 from sqlalchemy.orm import selectinload
 from starlette.middleware.sessions import SessionMiddleware
 
-from app import auth, data
+from app import auth, data, enterprise
 from app.db import (
     Customer, HealthieOrgUsage, SfdcAccount, SfdcContract, SyncRun, init_db, SessionLocal,
 )
@@ -177,6 +178,17 @@ def explorer(request: Request):
         session.close()
 
 
+@app.get("/enterprise", response_class=HTMLResponse)
+def enterprise_page(request: Request):
+    session = SessionLocal()
+    try:
+        return _page(request, "enterprise.html", {
+            "addons": [{"key": a["key"], "label": a["label"]} for a in enterprise.ADDONS],
+        }, session)
+    finally:
+        session.close()
+
+
 @app.get("/customer/{cm_uuid}", response_class=HTMLResponse)
 def customer_detail(request: Request, cm_uuid: str):
     session = SessionLocal()
@@ -302,12 +314,25 @@ def api_customer_history(cm_uuid: str):
 # Form POSTs (a `spec` JSON field) so a selection of thousands of IDs fits. The session
 # cookie is SameSite=Lax, so other sites can't trigger these with the user's session.
 
+_FORMULA_START = re.compile(r"^(?:[=@\t\r]|[+-](?![\d\s(]))")
+
+
+def _csv_cell(v):
+    """Neutralize spreadsheet formulas in text from SFDC/ChartMogul (=HYPERLINK(...) etc.).
+    Leaves numbers and phone-like values ("+1 555...", "-3") alone."""
+    if v is None:
+        return ""
+    if isinstance(v, str) and _FORMULA_START.match(v):
+        return "'" + v
+    return v
+
+
 def _csv_response(header: list[str], rows, filename: str) -> Response:
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow(header)
     for r in rows:
-        w.writerow(["" if v is None else v for v in r])
+        w.writerow([_csv_cell(v) for v in r])
     return Response(buf.getvalue(), media_type="text/csv", headers={
         "Content-Disposition": f'attachment; filename="{filename}"'})
 
@@ -383,6 +408,115 @@ def export_customers(spec: str = Form("{}")):
                 if r["account"] else ("",) * 14),
               r["uuid"], r["account"]["id"] if r["account"] else ""] for r in rows),
             f"customers_{_slug(s)}_{date.today().isoformat()}.csv")
+    finally:
+        session.close()
+
+
+# ---------------------------------------------------------------- enterprise add-ons
+
+class EntSpec(BaseModel):
+    """Enterprise view filters. addons: ["ai_scribe:none", ...]; account_ids narrows to
+    explicitly selected accounts (None = every account matching the filters)."""
+    paying: bool = True
+    status: str = ""
+    csm: str = ""
+    segment: str = ""
+    impl: str = ""
+    q: str = ""
+    addons: list[str] = []
+    account_ids: list[str] | None = None
+
+
+def _ent_rows(session, s: EntSpec) -> tuple[list[dict], list[dict]]:
+    base = enterprise.base_rows(session, data.snapshot(session))
+    rows = enterprise.filter_rows(base, s.paying, s.status, s.csm, s.segment, s.impl, s.q,
+                                  enterprise.parse_addon_filters(s.addons), s.account_ids)
+    return base, rows
+
+
+@app.get("/api/enterprise")
+def api_enterprise(paying: bool = True, status: str = "", csm: str = "", segment: str = "",
+                   impl: str = "", q: str = "", addon: list[str] = Query([])):
+    session = SessionLocal()
+    try:
+        base, rows = _ent_rows(session, EntSpec(paying=paying, status=status, csm=csm,
+                                                segment=segment, impl=impl, q=q, addons=addon))
+        return JSONResponse({"rows": rows, "summary": enterprise.summary(rows),
+                             "totals": enterprise.totals(rows), "facets": enterprise.facets(base),
+                             "addons": [{"key": a["key"], "label": a["label"]}
+                                        for a in enterprise.ADDONS]})
+    finally:
+        session.close()
+
+
+def _read_ent_spec(raw: str) -> EntSpec:
+    try:
+        return EntSpec.model_validate_json(raw or "{}")
+    except ValueError as exc:
+        raise HTTPException(400, f"Bad selection: {exc}")
+
+
+def _cell_text(c: dict) -> str:
+    if c["state"] == "has":
+        return c.get("source") or "has"
+    if c["state"] == "pipeline":
+        return f"{c.get('stage') or 'open'}, close {c.get('close_date') or '?'}"
+    if c["state"] == "lost":
+        return f"{c.get('reason') or 'no reason given'}, {c.get('close_date') or '?'}"
+    return c.get("note") or ""
+
+
+@app.post("/export/enterprise.csv")
+def export_enterprise(spec: str = Form("{}")):
+    s = _read_ent_spec(spec)
+    session = SessionLocal()
+    try:
+        _, rows = _ent_rows(session, s)
+        addons = enterprise.ADDONS
+        return _csv_response(
+            ["account", "customer_status", "sfdc_mrr_usd", "csm", "segment",
+             "implementation_status", "renewal_date", "kickoff_date", "website",
+             "healthie_org_id", "healthie_org_count", "active_providers",
+             "active_standard_users_sfdc", "has_active_client", "has_standard_seats",
+             "has_support_seats"]
+            + [f"{a['key']}_state" for a in addons] + [f"{a['key']}_detail" for a in addons]
+            + ["sfdc_account_id", "sfdc_url"],
+            ([r["name"], r["customer_status"], r["mrr"], r["csm"], r["segment"],
+              r["implementation_status"], r["renewal_date"], r["kickoff_date"], r["website"],
+              r["org_id"], r["org_count"], r["providers"], r["active_standard_users"],
+              r["flags"]["has_active_client"], r["flags"]["has_standard_seats"],
+              r["flags"]["has_support_seats"]]
+             + [r["addons"][a["key"]]["state"] for a in addons]
+             + [_cell_text(r["addons"][a["key"]]) for a in addons]
+             + [r["id"], f"{LIGHTNING_BASE}/lightning/r/Account/{r['id']}/view"]
+             for r in rows),
+            f"enterprise_addons_{date.today().isoformat()}.csv")
+    finally:
+        session.close()
+
+
+@app.post("/export/enterprise-contacts.csv")
+def export_enterprise_contacts(spec: str = Form("{}")):
+    """Providers and admins (not support staff, never clients) at the accounts in view,
+    excluding anyone opted out of email."""
+    s = _read_ent_spec(spec)
+    session = SessionLocal()
+    try:
+        _, rows = _ent_rows(session, s)
+        addons = enterprise.ADDONS
+        items = enterprise.campaign_contacts(session, rows)
+        return _csv_response(
+            ["email", "name", "title", "role", "account", "csm", "segment", "sfdc_mrr_usd"]
+            + [f"{a['key']}_state" for a in addons]
+            + ["sfdc_contact_id", "sfdc_account_id"],
+            ([x["contact"].email, x["contact"].name, x["contact"].title,
+              "owner" if x["contact"].is_org_owner else "admin" if x["contact"].is_org_admin
+              else "provider",
+              x["account"]["name"], x["account"]["csm"], x["account"]["segment"],
+              x["account"]["mrr"]]
+             + [x["account"]["addons"][a["key"]]["state"] for a in addons]
+             + [x["contact"].id, x["contact"].account_id] for x in items),
+            f"enterprise_contacts_{date.today().isoformat()}.csv")
     finally:
         session.close()
 
