@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}Home{% endblock %}
+{% block nav_home %}active{% endblock %}
+
+{% block content %}
+<div class="home-hero">
+  <h1>What do you want to do?</h1>
+  <p>Salesforce, ChartMogul and Healthie product data in one place. Pick a task below; each page walks you through it in numbered steps and ends with a list you can download or send on.</p>
+</div>
+
+<div class="tasks" id="tasks">
+  <a class="task" href="/enterprise">
+    <span class="tagline">Upsell</span>
+    <span class="q">Find Enterprise accounts to pitch an add-on</span>
+    <span class="what">See which accounts have AI Scribe, Bridge, white label and more, who's being pitched, who said no and why, and who was never asked. Then pull the providers and admins to contact.</span>
+    <span class="stat">{% if stats.enterprise %}<b>{{ stats.enterprise|num }}</b>paying Enterprise accounts · {{ stats.never_pitched|num }} add-ons never pitched{% else %}<b>—</b>loads after the next sync{% endif %}</span>
+    <span class="go">Open Enterprise add-ons →</span>
+  </a>
+  <a class="task" href="/deals">
+    <span class="tagline">Compete</span>
+    <span class="q">Understand why we win and lose</span>
+    <span class="what">Win rate, ACV and loss reasons against each competitor, for any record type and date range. Drill into the deals behind every number.</span>
+    <span class="stat">{% if stats.win_rate is not none %}<b>{{ (stats.win_rate * 100)|round|int }}%</b>win rate on new-sales deals this year{% else %}<b>—</b>loads after the next sync{% endif %}</span>
+    <span class="go">Open Win / loss →</span>
+  </a>
+  <a class="task" href="/explorer">
+    <span class="tagline">Explore</span>
+    <span class="q">See who has a product, and what they pay</span>
+    <span class="what">Pick one or more products to list current or former customers, revenue over time, contract values, and the Healthie users at those customers.</span>
+    <span class="stat">{% if stats.products %}<b>{{ stats.products|num }}</b>products to explore{% else %}<b>—</b>loads after the next sync{% endif %}</span>
+    <span class="go">Open Products →</span>
+  </a>
+  <a class="task" href="/quality">
+    <span class="tagline">Clean up</span>
+    <span class="q">Fix the Salesforce data behind these numbers</span>
+    <span class="what">Deals missing a competitor, loss reason, product or ACV, and add-on flags that disagree with billing, each with an owner and a ready-to-send fix list.</span>
+    <span class="stat">{% if stats.fixes is not none %}<b>{{ stats.fixes|num }}</b>fixes this year{% else %}<b>—</b>loads after the next sync{% endif %}</span>
+    <span class="go">Open Data quality →</span>
+  </a>
+</div>
+
+<div class="flow">
+  <section class="step">
+    <div class="step-head"><div class="step-titles"><h2>Where the data comes from</h2>
+      <div class="hint">{% if sync and sync.data_as_of %}Refreshed daily at {{ sync.schedule_utc }} UTC. Current data is from {{ sync.data_as_of_label }}.{% else %}Refreshed daily at 12:00 UTC.{% endif %}</div></div></div>
+    <ul>
+      <li><b>Salesforce:</b> accounts, contacts (Healthie users), opportunities, Enterprise attributes and add-on flags.</li>
+      <li><b>ChartMogul:</b> subscriptions, products and MRR, i.e. what each customer is billed today.</li>
+      <li><b>Healthie (via Metabase):</b> provider and client counts per organization. Counts only, never patient records.</li>
+    </ul>
+  </section>
+  <section class="step">
+    <div class="step-head"><div class="step-titles"><h2>Where it can go</h2>
+      <div class="hint">Every page ends with a “Use this list” step.</div></div></div>
+    <ul>
+      <li><b>CSV downloads:</b> accounts, deals and contacts, for your own analysis or to share.</li>
+      <li><b>HubSpot:</b> import a providers &amp; admins CSV (HubSpot → Contacts → Import). It matches existing contacts by email, since HubSpot already syncs from Salesforce. Sending lists to HubSpot directly is coming.</li>
+      <li><b>Salesforce:</b> every account, deal and contact links straight to its Salesforce record.</li>
+    </ul>
+  </section>
+</div>
+{% endblock %}

@@ -23,3 +23,8 @@ jobs:
       - run: pip install -r requirements-dev.txt
       # Offline: temp SQLite DB, no Salesforce/ChartMogul/Metabase credentials needed
       - run: python smoke_test.py
+      # Catch JavaScript syntax errors (a broken script silently disables a page)
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: for f in app/static/*.js; do node --check "$f"; done

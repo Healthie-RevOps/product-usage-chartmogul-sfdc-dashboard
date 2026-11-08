@@ -5,106 +5,132 @@
 {% block content %}
 <div class="page-head">
   <h1>Win / loss</h1>
-  <span class="sub">Why we win and lose deals, and against whom. Salesforce opportunities, open or closed since 2024.</span>
-  <button class="linklike" id="guide-toggle" type="button">How to use this page</button>
+  <span class="sub">Why we win and lose deals, and against whom. Salesforce opportunities open now or closed since 2024.</span>
 </div>
-<div class="guide" data-guide="deals" hidden>
-  <div class="guide-head"><b>What you can do here</b><span class="spacer"></span>
-    <button class="linklike" type="button" data-start-tour>Take the tour</button>
-    <button class="linklike guide-close" type="button">Hide</button></div>
-  <ul>
-    <li><b>Know where you win:</b> win rate, ACV and top loss reasons against each competitor. Click a competitor to filter the page to their deals.</li>
-    <li><b>Understand losses:</b> loss reasons by share and lost ACV, regrettable vs not. Click a reason to see the deals.</li>
-    <li><b>Change the lens:</b> record type, close dates, outcome, owner or incumbent at the top; export the deals as CSV.</li>
-  </ul>
-</div>
+
 <div id="empty-state" hidden></div>
 <div id="page-body">
 
-<div class="filters" role="search">
-  <select id="f-rt" aria-label="Record type"><option value="">All record types</option></select>
-  <select id="f-range" aria-label="Close date">
-    <option value="year">Closing this year</option>
-    <option value="last_year">Closed last year</option>
-    <option value="12m">Last 12 months</option>
-    <option value="90d">Last 90 days</option>
-    <option value="all">Any close date</option>
-    <option value="custom">Custom dates…</option>
-  </select>
-  <span id="custom-dates" hidden>
-    <input type="date" id="f-from" aria-label="Close date from"> – <input type="date" id="f-to" aria-label="Close date to">
-  </span>
-  <div class="seg" role="group" aria-label="Outcome" id="outcome-seg">
-    <button data-o="" aria-pressed="true">All</button>
-    <button data-o="won" aria-pressed="false">Won</button>
-    <button data-o="lost" aria-pressed="false">Lost</button>
-    <button data-o="open" aria-pressed="false">Open</button>
+<section class="step" id="step-scope">
+  <div class="step-head">
+    <span class="step-num">1</span>
+    <div class="step-titles"><h2>Set the scope</h2>
+      <div class="hint">Defaults to new-sales deals closing this year, like the Salesforce competitor report.</div></div>
   </div>
-  <select id="f-owner" aria-label="Owner"><option value="">Any owner</option></select>
-  <select id="f-incumbent" aria-label="Incumbent"><option value="">Any incumbent</option></select>
-  <input type="search" id="f-q" placeholder="Search deals or accounts…" autocomplete="off">
-  <button class="linklike" id="f-clear" hidden>Reset filters</button>
-</div>
-<div class="chips" id="chips" style="margin:-4px 0 14px"></div>
+  <div class="fields" role="search">
+    <div class="field"><label for="f-rt">Deal type</label><select id="f-rt"><option value="">All record types</option></select></div>
+    <div class="field"><label for="f-range">Close date</label>
+      <select id="f-range">
+        <option value="year">This year</option>
+        <option value="last_year">Last year</option>
+        <option value="12m">Last 12 months</option>
+        <option value="90d">Last 90 days</option>
+        <option value="all">Any date</option>
+        <option value="custom">Custom…</option>
+      </select></div>
+    <div class="field" id="custom-dates" hidden><span class="label">From – to</span>
+      <span><input type="date" id="f-from" aria-label="Close date from"> – <input type="date" id="f-to" aria-label="Close date to"></span></div>
+    <div class="field"><span class="label">Outcome</span>
+      <div class="seg" role="group" aria-label="Outcome" id="outcome-seg">
+        <button data-o="" aria-pressed="true">All</button>
+        <button data-o="won" aria-pressed="false">Won</button>
+        <button data-o="lost" aria-pressed="false">Lost</button>
+        <button data-o="open" aria-pressed="false">Open</button>
+      </div></div>
+    <div class="field"><label for="f-owner">Owner</label><select id="f-owner"><option value="">Any</option></select></div>
+    <div class="field"><label for="f-incumbent">Replacing</label><select id="f-incumbent" title="The system the prospect uses today (Incumbent)"><option value="">Any incumbent</option></select></div>
+    <div class="field"><label for="f-q">Deal or account</label><input type="search" id="f-q" placeholder="Search…" autocomplete="off"></div>
+    <button class="linklike" id="f-clear" hidden>Reset filters</button>
+  </div>
+</section>
 
-<div class="kpis" id="kpis"></div>
+<section class="step" id="step-results">
+  <div class="step-head">
+    <span class="step-num">2</span>
+    <div class="step-titles"><h2>Results</h2>
+      <div class="hint">How these deals turned out. ACV = Year 1 ACV, else Amount.</div></div>
+  </div>
+  <div class="kpis" id="kpis"></div>
+  <div id="quality-callout"></div>
+  <div class="chips" id="chips"></div>
+</section>
 
-<section class="card" id="comp-card">
-  <div class="card-head">
-    <h2>By competitor</h2>
-    <span class="spacer"></span>
-    <span class="small muted">Primary competitor per deal. Click a row to filter.</span>
+<section class="step" id="comp-card">
+  <div class="step-head">
+    <span class="step-num">3</span>
+    <div class="step-titles"><h2>Who we compete with</h2>
+      <div class="hint">Click a competitor to filter the whole page to deals involving them. Win rate = won ÷ (won + lost).</div></div>
   </div>
   <div class="table-wrap" style="max-height:520px">
     <table class="data breakdown">
       <thead><tr>
         <th>Competitor</th><th class="num">Won</th><th class="num">Lost</th><th class="num">Open</th>
-        <th style="width:150px">Win rate</th><th class="num">Won ACV</th><th class="num">Lost ACV</th>
-        <th>Top loss reasons</th><th class="num" title="Deals where this was the secondary competitor">As secondary</th>
+        <th style="width:160px">Win rate</th><th class="num">Won ACV</th><th class="num">Lost ACV</th>
+        <th>Main loss reasons</th><th class="num" title="Deals where this was the secondary competitor">As 2nd</th>
       </tr></thead>
       <tbody id="comp-body"></tbody>
     </table>
   </div>
-  <div class="note-line">Win rate = won ÷ (won + lost). ACV = Year 1 ACV, else Amount. “Not recorded” = no competitor, or a placeholder like “Other / Unknown”.</div>
+  <div class="note-line">One competitor per deal. “Not recorded” = no competitor, or a placeholder like “Other / Unknown”.</div>
 </section>
 
-<section class="card" id="reason-card">
-  <div class="card-head">
-    <h2>Loss reasons</h2>
-    <span class="spacer"></span>
-    <span class="small muted">Lost deals in view. Click a row to filter.</span>
+<section class="step" id="reason-card">
+  <div class="step-head">
+    <span class="step-num">4</span>
+    <div class="step-titles"><h2>Why we lose</h2>
+      <div class="hint">Click a reason to see those deals. Regrettable vs not comes from the R: / NR: mark reps add in Salesforce.</div></div>
   </div>
   <div class="table-wrap" style="max-height:440px">
     <table class="data breakdown">
       <thead><tr>
-        <th>Reason</th><th style="width:200px">Share of losses</th><th class="num">Lost</th>
-        <th class="num" title="Marked R: (regrettable) / NR: (non-regrettable) in Salesforce">Regrettable / not</th>
-        <th class="num">Lost ACV</th><th>Most common competitor</th>
+        <th>Reason</th><th style="width:220px">Share of losses</th><th class="num">Lost</th>
+        <th class="num">Regrettable / not</th><th class="num">Lost ACV</th><th>Most common competitor</th>
       </tr></thead>
       <tbody id="reason-body"></tbody>
     </table>
   </div>
-  <div class="note-line">Add-on deals use the add-on loss reason. “NR: Timing” and the older “Timing” count as one reason; the R / NR mark is shown separately.</div>
 </section>
 
-<section class="card" id="deals-card">
-  <div class="card-head">
-    <h2>Deals <span class="count" id="deal-count">0</span></h2>
-    <span class="spacer"></span>
-    <button class="btn small primary" id="export-deals">↓ Deals CSV</button>
+<section class="step" id="deals-card">
+  <div class="step-head">
+    <span class="step-num">5</span>
+    <div class="step-titles"><h2>The deals <span class="count" id="deal-count">0</span></h2>
+      <div class="hint">Every deal behind the numbers above. Click a deal to open it in Salesforce.</div></div>
   </div>
   <div class="table-wrap">
     <table class="data" id="deals-table">
       <thead><tr>
-        <th class="sortable" data-sort="name">Deal</th><th>Record type</th>
+        <th class="sortable" data-sort="name">Deal</th><th>Type</th>
         <th class="sortable" data-sort="outcome">Outcome</th><th class="sortable" data-sort="close_date">Close</th>
-        <th class="sortable num" data-sort="value">Year 1 ACV</th><th class="sortable" data-sort="competitor">Competitor</th>
-        <th>Incumbent</th><th>Reason</th><th class="sortable" data-sort="owner">Owner</th>
+        <th class="sortable num" data-sort="value">ACV</th><th class="sortable" data-sort="competitor">Competitor</th>
+        <th>Replacing</th><th>Reason</th><th class="sortable" data-sort="owner">Owner</th>
       </tr></thead>
       <tbody id="deals-body"></tbody>
     </table>
   </div>
   <div class="note-line" id="deals-note"></div>
+</section>
+
+<section class="step" id="step-use">
+  <div class="step-head">
+    <span class="step-num">6</span>
+    <div class="step-titles"><h2>Use this list</h2>
+      <div class="hint">Downloads follow the scope and any competitor or reason you clicked.</div></div>
+  </div>
+  <div class="uses">
+    <div class="use">
+      <h3>Deals</h3>
+      <p>Every deal in view with outcome, ACV, competitor, incumbent, loss reason (regrettable or not), why we won, and owner.</p>
+      <p class="where">For competitive analysis, battlecards, or sharing with sales leadership.</p>
+      <button class="btn primary" id="export-deals" type="button">↓ Download deals CSV</button>
+    </div>
+    <div class="use">
+      <h3>Fill the gaps</h3>
+      <p>Deals without a competitor or loss reason make these numbers less reliable. Send reps their list of fixes.</p>
+      <p class="where">Opens Data quality, filtered to missing competitors.</p>
+      <a class="btn" href="/quality?issue=missing_competitor">Open Data quality →</a>
+    </div>
+  </div>
 </section>
 
 </div>
@@ -113,4 +139,4 @@
 <script>window.LIGHTNING_BASE = {{ lightning_base|tojson }};</script>
 {% endblock %}
 
-{% block scripts %}<script src="/static/deals.js?v=3"></script>{% endblock %}
+{% block scripts %}<script src="/static/deals.js?v=5"></script>{% endblock %}

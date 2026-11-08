@@ -108,13 +108,12 @@
     const t = state.totals, el = $('kpis');
     el.textContent = '';
     [
-      ['Accounts', fmt.int(t.accounts), state.paying ? 'Enterprise, MRR above $0' : 'all Enterprise accounts'],
-      ['MRR', money(t.mrr), 'Salesforce MRR, accounts in view'],
-      ['Open add-on deals', fmt.int(t.pipeline), money(t.pipeline_amount) + ' open amount'],
-      ['Lost add-on deals', fmt.int(t.lost), 'latest deal per account and add-on'],
-      ['Never pitched', fmt.int(t.none), 'account and add-on pairs'],
-    ].forEach(([label, value, note]) => {
-      const k = h('div', 'kpi');
+      ['Accounts', fmt.int(t.accounts), state.paying ? 'paying Enterprise accounts' : 'Enterprise accounts', true],
+      ['MRR', money(t.mrr), 'Salesforce MRR'],
+      ['Open add-on deals', fmt.int(t.pipeline), money(t.pipeline_amount) + ' in pipeline'],
+      ['Lost add-on deals', fmt.int(t.lost), 'most recent deal was lost'],
+    ].forEach(([label, value, note, primary]) => {
+      const k = h('div', 'kpi' + (primary ? ' primary' : ''));
       k.append(h('div', 'label', label), h('div', 'value', value), h('div', 'note', note));
       el.appendChild(k);
     });
@@ -279,6 +278,19 @@
     $('check-all').indeterminate = !all && n > 0;
     $('selbar').hidden = n === 0;
     $('selbar-text').textContent = `${fmt.int(n)} account${n === 1 ? '' : 's'} selected`;
+    renderScope();
+  }
+  function renderScope() {
+    const el = $('use-scope');
+    el.textContent = '';
+    const n = state.selected.size;
+    const filters = Object.entries(state.addons).map(([k, v]) => `${ADDON_LABEL[k]}: ${STATE_LABEL[v]}`);
+    ['csm', 'segment', 'impl', 'status'].forEach(k => { if (state[k]) filters.push(state[k]); });
+    if (state.q) filters.push(`“${state.q}”`);
+    el.append('Downloads will cover ');
+    el.appendChild(h('b', null, n ? `the ${fmt.int(n)} account${n === 1 ? '' : 's'} you ticked` : `all ${fmt.int(state.rows.length)} accounts in step 3`));
+    el.append(filters.length && !n ? ` (${filters.join(' · ')}).` : '.');
+    if (!n) el.append(' Tick accounts in step 3 to narrow it.');
   }
   $('selbar-clear').addEventListener('click', () => { state.selected.clear(); renderMatrix(); });
 

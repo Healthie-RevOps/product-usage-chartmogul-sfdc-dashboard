@@ -164,7 +164,40 @@ def _page(request, name, ctx, session, status_code=200):
 
 # ---------------------------------------------------------------- pages
 
+def _home_stats(session) -> dict:
+    """One live number per task card on the home page. Each is None until its data exists."""
+    snap = data.snapshot(session)
+    out = {"products": len(snap.products) or None, "enterprise": None, "win_rate": None,
+           "fixes": None, "never_pitched": None}
+    ent = enterprise.filter_rows(enterprise.base_rows(session, snap), paying=True)
+    if ent:
+        out["enterprise"] = len(ent)
+        out["never_pitched"] = enterprise.totals(ent)["none"]
+    year = f"{date.today().year}-01-01"
+    d = deals.filter_rows(deals.base_rows(session, snap), record_type=quality.INITIAL,
+                          date_from=year)
+    t = deals.totals(d)
+    out["win_rate"] = t["win_rate"]
+    deal_base, mism = quality.base(session, snap)
+    if deal_base:
+        scoped = quality.filter_deals(deal_base, date_from=year)
+        out["fixes"] = sum(len(r["issues"]) for r in scoped) + len(mism)
+    return out
+
+
 @app.get("/", response_class=HTMLResponse)
+def home(request: Request):
+    # The explorer used to live at "/": keep old links (with filters) working
+    if request.url.query:
+        return RedirectResponse(f"/explorer?{request.url.query}", status_code=302)
+    session = SessionLocal()
+    try:
+        return _page(request, "home.html", {"stats": _home_stats(session)}, session)
+    finally:
+        session.close()
+
+
+@app.get("/explorer", response_class=HTMLResponse)
 def explorer(request: Request):
     session = SessionLocal()
     try:
@@ -228,12 +261,13 @@ def customer_detail(request: Request, cm_uuid: str):
 # Old URLs from the first version of the dashboard.
 @app.get("/products")
 def old_products():
-    return RedirectResponse("/", status_code=301)
+    return RedirectResponse("/explorer", status_code=301)
 
 
 @app.get("/product")
 def old_product(product: str = Query(""), view: str = Query("current")):
-    return RedirectResponse(f"/?product={quote(product)}&view={quote(view)}", status_code=301)
+    return RedirectResponse(f"/explorer?product={quote(product)}&view={quote(view)}",
+                            status_code=301)
 
 
 # ---------------------------------------------------------------- explorer API

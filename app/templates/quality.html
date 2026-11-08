@@ -5,55 +5,53 @@
 {% block content %}
 <div class="page-head">
   <h1>Data quality</h1>
-  <span class="sub">Salesforce fixes that make the Enterprise and Win / loss views more accurate, each with an owner.</span>
-  <button class="linklike" id="guide-toggle" type="button">How to use this page</button>
+  <span class="sub">The Salesforce fixes that make Enterprise add-ons and Win / loss accurate, each with an owner and a ready-to-send list.</span>
 </div>
-<div class="guide" data-guide="quality" hidden>
-  <div class="guide-head"><b>What you can do here</b><span class="spacer"></span>
-    <button class="linklike" type="button" data-start-tour>Take the tour</button>
-    <button class="linklike guide-close" type="button">Hide</button></div>
-  <ul>
-    <li><b>See what’s missing in Salesforce:</b> each issue is a field reps left blank. Click one to list the deals.</li>
-    <li><b>Send fix lists:</b> click an owner, then export the fix list CSV with links to each deal.</li>
-    <li><b>Why it matters:</b> once fixed, the Enterprise and Win / loss pages get more accurate after the next sync.</li>
-  </ul>
-</div>
+
 <div id="empty-state" hidden></div>
 <div id="page-body">
 
-<div class="filters" role="search">
-  <select id="f-range" aria-label="Deals closed">
-    <option value="year">Closed this year (+ all open)</option>
-    <option value="12m">Closed in the last 12 months (+ all open)</option>
-    <option value="all">Everything synced (since 2024)</option>
-  </select>
-  <select id="f-owner" aria-label="Owner"><option value="">Any owner or CSM</option></select>
-  <input type="search" id="f-q" placeholder="Search deals or accounts…" autocomplete="off">
-  <button class="linklike" id="f-clear" hidden>Reset filters</button>
-</div>
-<div class="chips" id="chips" style="margin:-4px 0 14px"></div>
-
-<section class="card" id="rules-card">
-  <div class="card-head">
-    <h2>Issues</h2>
-    <span class="spacer"></span>
-    <span class="small muted">Click an issue to list just those.</span>
+<section class="step" id="step-scope">
+  <div class="step-head">
+    <span class="step-num">1</span>
+    <div class="step-titles"><h2>Choose the period</h2>
+      <div class="hint">Open deals are always included; closed deals are limited to the period.</div></div>
   </div>
+  <div class="fields" role="search">
+    <div class="field"><label for="f-range">Deals closed</label>
+      <select id="f-range">
+        <option value="year">This year</option>
+        <option value="12m">Last 12 months</option>
+        <option value="all">Since 2024 (everything synced)</option>
+      </select></div>
+    <div class="field"><label for="f-owner">Owner or CSM</label><select id="f-owner"><option value="">Anyone</option></select></div>
+    <div class="field"><label for="f-q">Deal or account</label><input type="search" id="f-q" placeholder="Search…" autocomplete="off"></div>
+    <button class="linklike" id="f-clear" hidden>Reset filters</button>
+  </div>
+</section>
+
+<section class="step" id="rules-card">
+  <div class="step-head">
+    <span class="step-num">2</span>
+    <div class="step-titles"><h2>Pick what to fix</h2>
+      <div class="hint">Each issue is a Salesforce field left blank or out of date. Click one to work on just that.</div></div>
+  </div>
+  <div class="chips" id="chips" style="margin:0 0 12px"></div>
   <div class="table-wrap" style="max-height:none">
     <table class="data breakdown">
       <thead><tr>
-        <th>Issue</th><th>Affects</th><th class="num">To fix</th><th style="width:220px">Share of eligible deals</th><th>Fix</th>
+        <th>Issue</th><th>Improves</th><th class="num">To fix</th><th style="width:230px">Share of deals it applies to</th><th>How to fix it in Salesforce</th>
       </tr></thead>
       <tbody id="rules-body"></tbody>
     </table>
   </div>
 </section>
 
-<section class="card" id="owners-card">
-  <div class="card-head">
-    <h2>By deal owner</h2>
-    <span class="spacer"></span>
-    <span class="small muted">Click an owner to see their list.</span>
+<section class="step" id="owners-card">
+  <div class="step-head">
+    <span class="step-num">3</span>
+    <div class="step-titles"><h2>See who fixes it</h2>
+      <div class="hint">Click an owner to see only their deals, then send them the list in step 5.</div></div>
   </div>
   <div class="table-wrap" style="max-height:420px">
     <table class="data breakdown">
@@ -63,11 +61,11 @@
   </div>
 </section>
 
-<section class="card" id="work-card">
-  <div class="card-head">
-    <h2>Deals to fix <span class="count" id="work-count">0</span></h2>
-    <span class="spacer"></span>
-    <button class="btn small primary" id="export" title="One row per fix, with owner and Salesforce link: ready to send to reps and CSMs">↓ Fix list CSV</button>
+<section class="step" id="work-card">
+  <div class="step-head">
+    <span class="step-num">4</span>
+    <div class="step-titles"><h2>Review the deals <span class="count" id="work-count">0</span></h2>
+      <div class="hint">Click a deal to open it in Salesforce. “Suggested fix” proposes a value where we can tell, e.g. the Expansion Product from the deal name.</div></div>
   </div>
   <div class="table-wrap">
     <table class="data">
@@ -76,19 +74,37 @@
     </table>
   </div>
   <div class="note-line" id="work-note"></div>
+  <div id="mismatch-card">
+    <h3 class="step-sub">Add-on flags that disagree with billing <span class="count" id="mismatch-count">0</span></h3>
+    <div class="table-wrap" style="max-height:420px">
+      <table class="data">
+        <thead><tr><th>Account</th><th>CSM</th><th>Add-on</th><th>Problem</th><th>ChartMogul product</th></tr></thead>
+        <tbody id="mismatch-body"></tbody>
+      </table>
+    </div>
+    <div class="note-line">Enterprise accounts matched to ChartMogul, comparing each Salesforce <code>Stripe_Has_*</code> flag with live subscriptions. Owned by the CSM.</div>
+  </div>
 </section>
 
-<section class="card" id="mismatch-card">
-  <div class="card-head">
-    <h2>Add-on flags that disagree with billing <span class="count" id="mismatch-count">0</span></h2>
+<section class="step" id="step-use">
+  <div class="step-head">
+    <span class="step-num">5</span>
+    <div class="step-titles"><h2>Send the fix list</h2>
+      <div class="hint">Downloads follow the period, owner and issue you picked.</div></div>
   </div>
-  <div class="table-wrap" style="max-height:420px">
-    <table class="data">
-      <thead><tr><th>Account</th><th>CSM</th><th>Add-on</th><th>Problem</th><th>ChartMogul product</th></tr></thead>
-      <tbody id="mismatch-body"></tbody>
-    </table>
+  <div class="uses">
+    <div class="use">
+      <h3>Fix list</h3>
+      <p>One row per fix: owner, issue, what to change, and a link to the deal or account in Salesforce.</p>
+      <p class="where">Pick an owner in step 3 first, then send them the CSV in Slack or email.</p>
+      <button class="btn primary" id="export" type="button">↓ Download fix list CSV</button>
+    </div>
+    <div class="use">
+      <h3>See the payoff</h3>
+      <p>Fixes show up after the next daily sync. The pages they improve get more accurate right away.</p>
+      <p class="where"><a href="/deals">Win / loss</a> · <a href="/enterprise">Enterprise add-ons</a></p>
+    </div>
   </div>
-  <div class="note-line">Enterprise accounts matched to ChartMogul, comparing each Salesforce <code>Stripe_Has_*</code> flag with live subscriptions. The Enterprise page counts an add-on as “Has it” if either says so.</div>
 </section>
 
 </div>
@@ -98,4 +114,4 @@
 <script>window.LIGHTNING_BASE = {{ lightning_base|tojson }};</script>
 {% endblock %}
 
-{% block scripts %}<script src="/static/quality.js?v=2"></script>{% endblock %}
+{% block scripts %}<script src="/static/quality.js?v=3"></script>{% endblock %}

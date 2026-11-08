@@ -1,4 +1,4 @@
-/* Shared page helpers: the "What you can do here" guide and the no-data empty state.
+/* Shared page helpers: the no-data empty state.
  * All text goes into the DOM via textContent. */
 (function () {
   function h(tag, cls, text) {
@@ -11,25 +11,6 @@
     get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
     set(k, v) { try { localStorage.setItem(k, v); } catch (e) { /* private mode */ } },
   };
-
-  /* ---------------------------------------------------------------- page guide */
-  function initGuide() {
-    const guide = document.querySelector('.guide');
-    if (!guide) return;
-    const key = 'guide-hidden:' + guide.dataset.guide;
-    const toggle = document.getElementById('guide-toggle');
-    const show = on => {
-      guide.hidden = !on;
-      if (toggle) toggle.setAttribute('aria-expanded', on);
-      store.set(key, on ? '0' : '1');
-    };
-    guide.hidden = store.get(key) === '1';
-    if (toggle) {
-      toggle.setAttribute('aria-expanded', !guide.hidden);
-      toggle.addEventListener('click', () => show(guide.hidden));
-    }
-    guide.querySelector('.guide-close')?.addEventListener('click', () => show(false));
-  }
 
   /* ---------------------------------------------------------------- empty state */
   /* Show or hide the page body depending on whether the synced data exists yet.
@@ -69,5 +50,4 @@
   }
 
   window.App = { h, store, dataState };
-  document.addEventListener('DOMContentLoaded', initGuide);
 })();
