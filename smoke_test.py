@@ -356,5 +356,46 @@ check("gethealthie.com allowed", auth.email_allowed("a@gethealthie.com"), True)
 check("lookalike domain refused", auth.email_allowed("a@gethealthie.com.evil.com"), False)
 check("gmail refused", auth.email_allowed("a@gmail.com"), False)
 
+print("\nsync orchestration (ChartMogul down):")
+from sync import run_sync as rs  # noqa: E402
+from sync import chartmogul as cm_mod  # noqa: E402
+
+
+def run_main(snapshot_outcomes):
+    """Run rs.main() with fake steps. snapshot_outcomes: exception or None per attempt."""
+    calls = {"snapshot": 0, "metabase": 0, "slept": [], "exit": None}
+    outcomes = list(snapshot_outcomes)
+
+    def fake_snapshot(run_id):
+        calls["snapshot"] += 1
+        exc = outcomes.pop(0)
+        if exc:
+            raise exc
+
+    saved = (rs._snapshot, rs.metabase.sync_org_usage, rs.time.sleep)
+    rs._snapshot = fake_snapshot
+    rs.metabase.sync_org_usage = lambda: calls.__setitem__("metabase", calls["metabase"] + 1)
+    rs.time.sleep = calls["slept"].append
+    try:
+        rs.main()
+    except SystemExit as e:
+        calls["exit"] = e.code
+    finally:
+        rs._snapshot, rs.metabase.sync_org_usage, rs.time.sleep = saved
+    return calls
+
+
+transient = cm_mod.ChartMogulTransientError("Gave up on /customers after 9 attempts")
+c = run_main([transient, None])
+check("CM down once -> waits, retries, succeeds",
+      (c["snapshot"], c["slept"], c["metabase"], c["exit"]),
+      (2, [rs.SNAPSHOT_RETRY_WAIT_S], 1, None))
+c = run_main([transient, transient])
+check("CM down twice -> Metabase still runs, exit 1",
+      (c["snapshot"], c["metabase"], c["exit"]), (2, 1, 1))
+c = run_main([ValueError("bug")])
+check("non-ChartMogul error -> no retry, Metabase still runs, exit 1",
+      (c["snapshot"], c["slept"], c["metabase"], c["exit"]), (1, [], 1, 1))
+
 print(f"\n{'ALL CHECKS PASSED' if not failures else 'FAILURES: ' + ', '.join(failures)}")
 raise SystemExit(1 if failures else 0)

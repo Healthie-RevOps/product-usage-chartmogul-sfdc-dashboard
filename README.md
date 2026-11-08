@@ -124,7 +124,10 @@ Design decisions (deliberate — don't undo casually):
    `RAILWAY_SERVICE_NAME` (override with `SERVICE_ROLE`):
    - `web` serves the dashboard. Generate a public domain for it.
    - `sync` runs once and exits. In the dashboard, set Service → Settings → Cron Schedule
-     to `0 9 * * *` (09:00 UTC ≈ 4/5am ET, after ChartMogul's own Stripe import settles).
+     to `0 12 * * *` (12:00 UTC ≈ 7/8am ET). Not earlier: ChartMogul's customer list
+     timed out every night at 09:00 UTC in early Nov 2026 while working fine later in the
+     day. If ChartMogul is still down, the sync waits 30 min and retries once, and the
+     Metabase step runs either way.
      The CLI's `environment edit --service-config` did not apply this (v4.44), so set it in the UI.
 4. Set env vars on **both** services (see `.env.example`).
 5. Trigger the sync service once manually, then open the web service URL.
