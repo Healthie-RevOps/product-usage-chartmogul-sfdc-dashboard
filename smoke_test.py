@@ -13,6 +13,9 @@ from datetime import date, datetime
 os.environ["DATABASE_URL"] = "sqlite:///" + os.path.join(
     tempfile.mkdtemp(), "smoke.db"
 ).replace("\\", "/")
+# Keep a developer's real .env out of the test (dotenv never overrides existing vars).
+os.environ["METABASE_API_KEY"] = ""
+os.environ["METABASE_SESSION"] = ""
 
 from fastapi.testclient import TestClient  # noqa: E402
 

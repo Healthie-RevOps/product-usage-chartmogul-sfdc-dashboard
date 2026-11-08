@@ -13,8 +13,8 @@ fails before writing anything if Metabase returns any other column (e.g. someone
 adds emails to the question).
 
 Auth, first one set wins:
-  METABASE_API_KEY  admin-issued key, ideally limited to one collection (target state)
-  METABASE_SESSION  browser session cookie `metabase.SESSION` (proof of concept only:
+  METABASE_API_KEY  admin-issued read-only key, limited to the cards' collection
+  METABASE_SESSION  browser session cookie `metabase.SESSION` (local testing only:
                     expires, carries the user's full access; never set it on Railway)
 """
 import logging

@@ -65,21 +65,21 @@ column), the customer page, the customers CSV, and `/api/account/…`.
   allowlist, and the sync refuses to load anything if Metabase returns another column.
 - **Saved questions only, no SQL.** The gateway in front of Metabase blocks ad-hoc SQL
   from outside the UI. Edit the query in Metabase, not here.
-- **Auth:** `METABASE_API_KEY` (target: a read-only key limited to one collection), or
-  `METABASE_SESSION` (your browser's `metabase.SESSION` cookie) for **local testing only**.
-  Never set a session cookie on Railway.
+- **Auth:** `METABASE_API_KEY`, a read-only key that only needs access to the collection
+  holding the two cards. Set it on **both** Railway services: `sync` uses it for the
+  nightly run, and `web` for manual refreshes. `METABASE_SESSION` (your browser's
+  `metabase.SESSION` cookie) still works as a fallback for **local testing only**. Never
+  set a session cookie on Railway.
 - Runs at the end of the nightly sync (non-fatal, own transaction). Without credentials
-  it is skipped and existing data is kept. Refresh on its own: `python -m sync.metabase`.
-- **Until the API key exists, refresh production by hand.** This runs inside the `web`
-  container and passes your local session cookie on stdin. Nothing is stored on Railway,
-  and the database stays private. Needs `railway link` to this project and an SSH key
-  registered via `railway ssh keys add`:
+  it is skipped and existing data is kept. Refresh on its own: `python -m sync.metabase`
+  (locally, `.env` is loaded automatically).
+- **Refresh production on demand** without waiting for the nightly run (needs
+  `railway link` to this project and an SSH key registered via `railway ssh keys add`):
   ```bash
-  { grep '^METABASE_SESSION=' .env | cut -d= -f2- | tr -d '[:space:]'; echo; } \
-    | railway ssh --service web -- 'read -r METABASE_SESSION && export METABASE_SESSION && python -m sync.metabase'
+  railway ssh --service web -- python -m sync.metabase
   ```
-  The nightly ChartMogul/SFDC sync doesn't clear these counts, and the site picks up a
-  refresh on the next page load.
+  The ChartMogul/SFDC sync doesn't clear these counts, and the site picks up a refresh on
+  the next page load.
 - "Active" = `PROVIDER_IS_ACTIVE` (not deactivated), not recent usage. ~95% of orgs have
   at least one. Use last provider activity for recency.
 - Providers at sub-organizations count under the sub-org's own ID, not the parent's.
