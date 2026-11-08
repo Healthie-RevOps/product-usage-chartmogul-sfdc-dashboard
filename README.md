@@ -200,7 +200,7 @@ healthie-events-calendar and medallion-credentialing:
 ## Local dev
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements-dev.txt   # includes requirements.txt + test deps
 cp .env.example .env   # fill in keys
 python -m sync.run_sync          # populates local.db (SQLite fallback)
 ALLOW_INSECURE_NO_AUTH=1 uvicorn app.main:app --reload   # skip Google sign-in locally
