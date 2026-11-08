@@ -70,6 +70,16 @@ def _first_name(free_text: str | None) -> str | None:
     return None
 
 
+_UNANSWERED = {"otherunknown", "unknown", "tbd", ""}
+
+
+def competitor_answered(o) -> bool:
+    """Did the rep answer the competitor question? "None (Healthie User)" and "Not
+    Applicable" are answers (no competitor); blank and "Other / Unknown" are not."""
+    return any(v and _key(v) not in _UNANSWERED
+               for v in (o.competitor, o.competitor_text, o.competition))
+
+
 def primary_competitor(o) -> str | None:
     return (norm_competitor(o.competitor) or norm_competitor(o.competitor_text)
             or _first_name(o.competition))

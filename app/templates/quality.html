@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block title %}Data quality{% endblock %}
+{% block nav_quality %}active{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <h1>Data quality</h1>
+  <span class="sub">Salesforce fixes that make the Enterprise and Win / loss views more accurate, each with an owner.</span>
+</div>
+
+<div class="filters" role="search">
+  <select id="f-range" aria-label="Deals closed">
+    <option value="year">Closed this year (+ all open)</option>
+    <option value="12m">Closed in the last 12 months (+ all open)</option>
+    <option value="all">Everything synced (since 2024)</option>
+  </select>
+  <select id="f-owner" aria-label="Owner"><option value="">Any owner or CSM</option></select>
+  <input type="search" id="f-q" placeholder="Search deals or accounts…" autocomplete="off">
+  <button class="linklike" id="f-clear" hidden>Reset filters</button>
+</div>
+<div class="chips" id="chips" style="margin:-4px 0 14px"></div>
+
+<section class="card" id="rules-card">
+  <div class="card-head">
+    <h2>Issues</h2>
+    <span class="spacer"></span>
+    <span class="small muted">Click an issue to list just those.</span>
+  </div>
+  <div class="table-wrap" style="max-height:none">
+    <table class="data breakdown">
+      <thead><tr>
+        <th>Issue</th><th>Affects</th><th class="num">To fix</th><th style="width:220px">Share of eligible deals</th><th>Fix</th>
+      </tr></thead>
+      <tbody id="rules-body"></tbody>
+    </table>
+  </div>
+</section>
+
+<section class="card" id="owners-card">
+  <div class="card-head">
+    <h2>By deal owner</h2>
+    <span class="spacer"></span>
+    <span class="small muted">Click an owner to see their list.</span>
+  </div>
+  <div class="table-wrap" style="max-height:420px">
+    <table class="data breakdown">
+      <thead><tr id="owners-head"></tr></thead>
+      <tbody id="owners-body"></tbody>
+    </table>
+  </div>
+</section>
+
+<section class="card" id="work-card">
+  <div class="card-head">
+    <h2>Deals to fix <span class="count" id="work-count">0</span></h2>
+    <span class="spacer"></span>
+    <button class="btn small primary" id="export" title="One row per fix, with owner and Salesforce link: ready to send to reps and CSMs">↓ Fix list CSV</button>
+  </div>
+  <div class="table-wrap">
+    <table class="data">
+      <thead><tr><th>Deal</th><th>Owner</th><th>Stage</th><th>Close</th><th>Issues</th><th>Suggested fix</th></tr></thead>
+      <tbody id="work-body"></tbody>
+    </table>
+  </div>
+  <div class="note-line" id="work-note"></div>
+</section>
+
+<section class="card" id="mismatch-card">
+  <div class="card-head">
+    <h2>Add-on flags that disagree with billing <span class="count" id="mismatch-count">0</span></h2>
+  </div>
+  <div class="table-wrap" style="max-height:420px">
+    <table class="data">
+      <thead><tr><th>Account</th><th>CSM</th><th>Add-on</th><th>Problem</th><th>ChartMogul product</th></tr></thead>
+      <tbody id="mismatch-body"></tbody>
+    </table>
+  </div>
+  <div class="note-line">Enterprise accounts matched to ChartMogul, comparing each Salesforce <code>Stripe_Has_*</code> flag with live subscriptions. The Enterprise page counts an add-on as “Has it” if either says so.</div>
+</section>
+
+<form id="export-form" method="post" hidden><input type="hidden" name="spec" id="export-spec"></form>
+<script id="rules-data" type="application/json">{{ rules|tojson }}</script>
+<script>window.LIGHTNING_BASE = {{ lightning_base|tojson }};</script>
+{% endblock %}
+
+{% block scripts %}<script src="/static/quality.js?v=1"></script>{% endblock %}

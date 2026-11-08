@@ -133,7 +133,7 @@
       ['Won ACV', money(t.won_value), 'Year 1 ACV, won deals'],
       ['Lost ACV', money(t.lost_value), 'Year 1 ACV, lost deals'],
       ['Open pipeline', money(t.open_value), `${fmt.int(t.open)} open deals`],
-      ['Competitor recorded', pct(t.competitor_recorded), 'of closed deals', t.competitor_recorded != null && t.competitor_recorded < 0.6],
+      ['Competitor named', pct(t.competitor_recorded), 'of closed deals name one', t.competitor_recorded != null && t.competitor_recorded < 0.6],
       ['Loss reason recorded', pct(t.reason_recorded), 'of lost deals', t.reason_recorded != null && t.reason_recorded < 0.6],
     ];
     tiles.forEach(([label, value, note, warn]) => {

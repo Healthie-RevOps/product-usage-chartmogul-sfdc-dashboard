@@ -212,6 +212,13 @@ ALLOW_INSECURE_NO_AUTH=1 uvicorn app.main:app --reload   # skip Google sign-in l
   spelling variants merge; loss reasons drop the `R:`/`NR:` prefix into a separate
   regrettable / non-regrettable field.
 
+- `/quality` (Data quality): a Salesforce fix list with an owner per fix. Deal rules: closed
+  new-sales deal with no competitor answer, lost deal with no loss reason, lost add-on deal with
+  no add-on loss reason, Expansion Deal with no Expansion Product (with a suggestion from the
+  deal name), won deal with no Year 1 ACV, open deal past its close date. Account rule: Enterprise
+  `Stripe_Has_*` flag that disagrees with live ChartMogul billing (owner = CSM). Counts by rule
+  and by owner; the CSV is one row per fix with a Salesforce link. Logic in `app/quality.py`.
+
 ## JSON API (for other tooling / Claude skills)
 
 - `GET /api/products` — plan-level rollup: customers + MRR per product
