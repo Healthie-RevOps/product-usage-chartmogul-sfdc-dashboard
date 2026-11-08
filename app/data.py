@@ -7,11 +7,12 @@ are queried on demand for the customers in view.
 """
 from __future__ import annotations
 
+import os
 import re
 import threading
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from sqlalchemy import desc, func
 
@@ -79,6 +80,47 @@ def _latest_success_id(session) -> tuple | None:
     if run is None:
         return None
     return run, session.query(func.max(HealthieOrgUsage.synced_at)).scalar()
+
+
+SYNC_SCHEDULE_UTC = os.environ.get("SYNC_SCHEDULE_UTC", "12:00")   # display only; set in Railway
+RUNNING_STALE_HOURS = 3
+
+
+def _utc(dt):
+    if dt is None:
+        return None
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt.astimezone(timezone.utc)
+
+
+def sync_status(session) -> dict:
+    """What the top bar and empty states say about data freshness."""
+    ok = (session.query(SyncRun).filter(SyncRun.status == "success")
+          .order_by(desc(SyncRun.id)).first())
+    latest = session.query(SyncRun).order_by(desc(SyncRun.id)).first()
+    now = datetime.now(timezone.utc)
+    running = None
+    if latest and latest.status == "running":
+        started = _utc(latest.started_at)
+        if started and (now - started).total_seconds() < RUNNING_STALE_HOURS * 3600:
+            running = started
+    last_failed = bool(latest and latest.id != (ok.id if ok else None)
+                       and latest.status != "running")
+    hh, _, mm = SYNC_SCHEDULE_UTC.partition(":")
+    nxt = now.replace(hour=int(hh), minute=int(mm or 0), second=0, microsecond=0)
+    if nxt <= now:
+        nxt += timedelta(days=1)
+
+    def iso(d):
+        return d.isoformat() if d else None
+    data_as_of = _utc(ok.finished_at or ok.started_at) if ok else None
+    def label(d):
+        return d.strftime("%b %d, %H:%M UTC") if d else None
+    return {"data_as_of": iso(data_as_of), "data_as_of_label": label(data_as_of),
+            "running_since": iso(running), "running_since_label": label(running),
+            "next_run_label": label(nxt),
+            "last_failed": last_failed,
+            "last_error": (latest.error or "")[:200] if last_failed and latest else None,
+            "next_run": iso(nxt), "schedule_utc": SYNC_SCHEDULE_UTC}
 
 
 def snapshot(session) -> Snapshot:

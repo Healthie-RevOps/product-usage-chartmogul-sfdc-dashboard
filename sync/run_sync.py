@@ -335,6 +335,12 @@ def _snapshot_with_retry(run_id: int) -> None:
 def main():
     init_db()
     with session_scope() as session:
+        # Only one sync runs at a time, so any run still marked "running" was killed
+        # (deployment replaced, out of memory, ...). Without this it shows "running" forever.
+        for stale in session.query(SyncRun).filter(SyncRun.status == "running"):
+            stale.status = "failed"
+            stale.finished_at = datetime.now(timezone.utc)
+            stale.error = "Interrupted: the sync process stopped before finishing"
         run = SyncRun()
         session.add(run)
         session.flush()

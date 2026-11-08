@@ -6,7 +6,20 @@
 <div class="page-head">
   <h1>Data quality</h1>
   <span class="sub">Salesforce fixes that make the Enterprise and Win / loss views more accurate, each with an owner.</span>
+  <button class="linklike" id="guide-toggle" type="button">How to use this page</button>
 </div>
+<div class="guide" data-guide="quality" hidden>
+  <div class="guide-head"><b>What you can do here</b><span class="spacer"></span>
+    <button class="linklike" type="button" data-start-tour>Take the tour</button>
+    <button class="linklike guide-close" type="button">Hide</button></div>
+  <ul>
+    <li><b>See what’s missing in Salesforce:</b> each issue is a field reps left blank. Click one to list the deals.</li>
+    <li><b>Send fix lists:</b> click an owner, then export the fix list CSV with links to each deal.</li>
+    <li><b>Why it matters:</b> once fixed, the Enterprise and Win / loss pages get more accurate after the next sync.</li>
+  </ul>
+</div>
+<div id="empty-state" hidden></div>
+<div id="page-body">
 
 <div class="filters" role="search">
   <select id="f-range" aria-label="Deals closed">
@@ -78,9 +91,11 @@
   <div class="note-line">Enterprise accounts matched to ChartMogul, comparing each Salesforce <code>Stripe_Has_*</code> flag with live subscriptions. The Enterprise page counts an add-on as “Has it” if either says so.</div>
 </section>
 
+</div>
+
 <form id="export-form" method="post" hidden><input type="hidden" name="spec" id="export-spec"></form>
 <script id="rules-data" type="application/json">{{ rules|tojson }}</script>
 <script>window.LIGHTNING_BASE = {{ lightning_base|tojson }};</script>
 {% endblock %}
 
-{% block scripts %}<script src="/static/quality.js?v=1"></script>{% endblock %}
+{% block scripts %}<script src="/static/quality.js?v=2"></script>{% endblock %}

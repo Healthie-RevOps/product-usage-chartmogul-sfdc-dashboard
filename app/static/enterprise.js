@@ -52,6 +52,7 @@
     try {
       const r = await fetch('/api/enterprise?' + p).then(r => r.json());
       if (my !== seq) return;
+      if (!App.dataState(r, 'Enterprise data')) return;
       state.rows = r.rows; state.summary = r.summary; state.totals = r.totals;
       const ids = new Set(r.rows.map(x => x.id));
       [...state.selected].forEach(id => { if (!ids.has(id)) state.selected.delete(id); });

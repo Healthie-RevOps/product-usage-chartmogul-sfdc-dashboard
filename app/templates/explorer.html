@@ -6,6 +6,17 @@
 <div class="page-head">
   <h1>Product Explorer</h1>
   <span class="sub">Pick products to see who holds them, what they pay, how that changed, and who to contact.</span>
+  <button class="linklike" id="guide-toggle" type="button">How to use this page</button>
+</div>
+<div class="guide" data-guide="explorer" hidden>
+  <div class="guide-head"><b>What you can do here</b><span class="spacer"></span>
+    <button class="linklike" type="button" data-start-tour>Take the tour</button>
+    <button class="linklike guide-close" type="button">Hide</button></div>
+  <ul>
+    <li><b>See who has a product:</b> pick one or more products to list current or former customers, what they pay, and how that changed over time.</li>
+    <li><b>Narrow to the right people:</b> tick customers to filter the contacts list, then switch to owners &amp; admins.</li>
+    <li><b>Export:</b> download customers or contacts as CSV for follow-up.</li>
+  </ul>
 </div>
 
 <div class="filters" role="search">
@@ -135,4 +146,4 @@
 <script>window.LIGHTNING_BASE = {{ lightning_base|tojson }};</script>
 {% endblock %}
 
-{% block scripts %}<script src="/static/explorer.js?v=5"></script>{% endblock %}
+{% block scripts %}<script src="/static/explorer.js?v=6"></script>{% endblock %}
