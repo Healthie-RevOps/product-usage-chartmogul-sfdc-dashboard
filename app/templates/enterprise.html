@@ -5,49 +5,47 @@
 {% block content %}
 <div class="page-head">
   <h1>Enterprise add-ons</h1>
-  <span class="sub">For each add-on: which Enterprise accounts have it, are being pitched it, said no, or were never pitched.</span>
-  <button class="linklike" id="guide-toggle" type="button">How to use this page</button>
+  <span class="sub">Find Enterprise accounts to pitch an add-on, see why past pitches failed, and pull the people to contact.</span>
 </div>
-<div class="guide" data-guide="enterprise" hidden>
-  <div class="guide-head"><b>What you can do here</b><span class="spacer"></span>
-    <button class="linklike" type="button" data-start-tour>Take the tour</button>
-    <button class="linklike guide-close" type="button">Hide</button></div>
-  <ul>
-    <li><b>Find accounts to pitch:</b> click a number in Add-on adoption, e.g. AI Scribe → <i>Not pitched</i>, to list those accounts. Combine with CSM, segment, or implementation status.</li>
-    <li><b>See the story behind each cell:</b> hover for the deal, stage, loss reason, competitor and revisit date; click an open or lost cell to open the deal in Salesforce.</li>
-    <li><b>Build a campaign list:</b> export the accounts, or the providers &amp; admins at them (active, with email, not opted out). Tick accounts first to narrow it.</li>
-  </ul>
-</div>
+
 <div id="empty-state" hidden></div>
 <div id="page-body">
 
-<div class="filters" role="search">
-  <div class="seg" role="group" aria-label="Which Enterprise accounts" id="paying-seg">
-    <button data-paying="1" aria-pressed="true" title="Enterprise plan with Salesforce MRR above $0 (same as the Salesforce report)">Paying</button>
-    <button data-paying="0" aria-pressed="false">All Enterprise</button>
+<section class="step" id="step-choose">
+  <div class="step-head">
+    <span class="step-num">1</span>
+    <div class="step-titles"><h2>Choose accounts</h2>
+      <div class="hint">Start with all paying Enterprise accounts, or narrow by CSM, segment or status.</div></div>
   </div>
-  <select id="f-status" aria-label="Customer status"><option value="">Any customer status</option></select>
-  <select id="f-csm" aria-label="CSM"><option value="">Any CSM</option></select>
-  <select id="f-segment" aria-label="Segment"><option value="">Any segment</option></select>
-  <select id="f-impl" aria-label="Implementation status"><option value="">Any implementation status</option></select>
-  <input type="search" id="f-q" placeholder="Search accounts…" autocomplete="off">
-  <button class="linklike" id="f-clear" hidden>Clear filters</button>
-</div>
-<div class="chips" id="addon-chips" style="margin:-4px 0 14px"></div>
-
-<div class="kpis" id="kpis"></div>
-
-<section class="card" id="summary-card">
-  <div class="card-head">
-    <h2>Add-on adoption</h2>
-    <span class="spacer"></span>
-    <div class="legend" id="state-legend" style="margin:0"></div>
+  <div class="fields" role="search">
+    <div class="field"><span class="label">Accounts</span>
+      <div class="seg" role="group" aria-label="Which Enterprise accounts" id="paying-seg">
+        <button data-paying="1" aria-pressed="true" title="Enterprise plan with Salesforce MRR above $0 (same as the Salesforce report)">Paying</button>
+        <button data-paying="0" aria-pressed="false">All Enterprise</button>
+      </div></div>
+    <div class="field"><label for="f-csm">CSM</label><select id="f-csm"><option value="">Any</option></select></div>
+    <div class="field"><label for="f-segment">Segment</label><select id="f-segment"><option value="">Any</option></select></div>
+    <div class="field"><label for="f-impl">Implementation</label><select id="f-impl"><option value="">Any</option></select></div>
+    <div class="field"><label for="f-status">Customer status</label><select id="f-status"><option value="">Any</option></select></div>
+    <div class="field"><label for="f-q">Account name</label><input type="search" id="f-q" placeholder="Search…" autocomplete="off"></div>
+    <button class="linklike" id="f-clear" hidden>Reset filters</button>
   </div>
+</section>
+
+<section class="step" id="summary-card">
+  <div class="step-head">
+    <span class="step-num">2</span>
+    <div class="step-titles"><h2>Find the gap</h2>
+      <div class="hint">Click a number to list those accounts below. For example, AI Scribe → <b>Not pitched</b> is your whitespace; <b>Lost</b> shows who said no and why.</div></div>
+    <div class="step-actions"><div class="legend" id="state-legend" style="margin:0"></div></div>
+  </div>
+  <div class="kpis" id="kpis"></div>
+  <div class="chips" id="addon-chips" style="margin:0 0 12px"></div>
   <div class="table-wrap" style="max-height:none">
     <table class="data adoption">
       <thead><tr>
         <th>Add-on</th>
-        <th style="width:34%">Accounts in view</th>
+        <th style="width:32%">Accounts</th>
         <th class="num">Has it</th>
         <th class="num">In pipeline</th>
         <th class="num">Lost</th>
@@ -57,15 +55,14 @@
       <tbody id="summary-body"></tbody>
     </table>
   </div>
-  <div class="note-line">Click a count to filter the accounts below; click it again to clear. “Has it” = Salesforce add-on flag, or a live ChartMogul subscription to the add-on (Bridge and Visualize+ have no Salesforce flag), or a deal won in the last 120 days.</div>
+  <div class="note-line">“Has it” = Salesforce add-on flag, or a live ChartMogul subscription (Bridge and Visualize+ have no Salesforce flag), or a deal won in the last 120 days.</div>
 </section>
 
-<section class="card" id="matrix-card">
-  <div class="card-head">
-    <h2>Accounts <span class="count" id="acct-count">0</span></h2>
-    <span class="spacer"></span>
-    <button class="btn small" id="export-accounts" title="Accounts in view (or the selected ones), with every add-on's state">↓ Accounts CSV</button>
-    <button class="btn small primary" id="export-contacts" title="Active providers, owners and admins at these accounts, with an email, not opted out of email">↓ Providers &amp; admins CSV</button>
+<section class="step" id="matrix-card">
+  <div class="step-head">
+    <span class="step-num">3</span>
+    <div class="step-titles"><h2>Review accounts <span class="count" id="acct-count">0</span></h2>
+      <div class="hint">Hover a cell for the deal, stage, loss reason and revisit date; click an open or lost cell to open the deal in Salesforce. Tick accounts to narrow your list in step 4.</div></div>
   </div>
   <div class="table-wrap" id="matrix-wrap">
     <table class="data matrix" id="matrix">
@@ -73,7 +70,35 @@
       <tbody id="matrix-body"></tbody>
     </table>
   </div>
-  <div class="note-line">Hover a cell for details; click an open or lost cell to open the deal in Salesforce. Add-on deals are found by the deal's Expansion Product, else by its name (e.g. “Scribe”, “Bridge”, “white label”).</div>
+  <div class="note-line">Add-on deals are matched by the deal's Expansion Product, else by its name (e.g. “Scribe”, “Bridge”, “white label”).</div>
+</section>
+
+<section class="step" id="step-use">
+  <div class="step-head">
+    <span class="step-num">4</span>
+    <div class="step-titles"><h2>Use this list</h2>
+      <div class="hint">Downloads follow everything you chose above.</div></div>
+  </div>
+  <p class="scope-note" id="use-scope"></p>
+  <div class="uses">
+    <div class="use">
+      <h3>Providers &amp; admins</h3>
+      <p>Active Healthie providers, owners and admins at these accounts, with an email, excluding anyone who opted out of email. Support staff and clients are never included.</p>
+      <p class="where">For a campaign: HubSpot → Contacts → Import. It matches existing contacts by email.</p>
+      <button class="btn primary" id="export-contacts" type="button">↓ Download contacts CSV</button>
+    </div>
+    <div class="use">
+      <h3>Accounts</h3>
+      <p>One row per account with CSM, segment, MRR, renewal, and every add-on's status and detail.</p>
+      <p class="where">For planning, account reviews, or sharing with a CSM.</p>
+      <button class="btn" id="export-accounts" type="button">↓ Download accounts CSV</button>
+    </div>
+    <div class="use soon">
+      <h3>Send to HubSpot</h3>
+      <p>Create a HubSpot list and a draft email for these contacts in one click, without a CSV.</p>
+      <p class="where">Until then, use the contacts CSV and HubSpot's import.</p>
+    </div>
+  </div>
 </section>
 
 <div class="selbar" id="selbar" hidden>
@@ -90,4 +115,4 @@
 <script>window.LIGHTNING_BASE = {{ lightning_base|tojson }};</script>
 {% endblock %}
 
-{% block scripts %}<script src="/static/enterprise.js?v=2"></script>{% endblock %}
+{% block scripts %}<script src="/static/enterprise.js?v=3"></script>{% endblock %}

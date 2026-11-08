@@ -129,19 +129,30 @@
   function renderKpis() {
     const t = state.data.totals, el = $('kpis');
     el.textContent = '';
-    const tiles = [
-      ['Win rate', pct(t.win_rate), `${fmt.int(t.won)} won · ${fmt.int(t.lost)} lost`],
-      ['Won ACV', money(t.won_value), 'Year 1 ACV, won deals'],
-      ['Lost ACV', money(t.lost_value), 'Year 1 ACV, lost deals'],
+    [
+      ['Win rate', pct(t.win_rate), `${fmt.int(t.won)} won · ${fmt.int(t.lost)} lost`, true],
+      ['Won ACV', money(t.won_value), 'won deals'],
+      ['Lost ACV', money(t.lost_value), 'lost deals'],
       ['Open pipeline', money(t.open_value), `${fmt.int(t.open)} open deals`],
-      ['Competitor named', pct(t.competitor_recorded), 'of closed deals name one', t.competitor_recorded != null && t.competitor_recorded < 0.6],
-      ['Loss reason recorded', pct(t.reason_recorded), 'of lost deals', t.reason_recorded != null && t.reason_recorded < 0.6],
-    ];
-    tiles.forEach(([label, value, note, warn]) => {
-      const k = h('div', 'kpi' + (warn ? ' warn' : ''));
+    ].forEach(([label, value, note, primary]) => {
+      const k = h('div', 'kpi' + (primary ? ' primary' : ''));
       k.append(h('div', 'label', label), h('div', 'value', value), h('div', 'note', note));
       el.appendChild(k);
     });
+    // How trustworthy the competitor and reason numbers are, with a way to fix it
+    const box = $('quality-callout');
+    box.textContent = '';
+    const gaps = [];
+    if (t.competitor_recorded != null && t.competitor_recorded < 0.6) gaps.push(`a competitor is named on only ${pct(t.competitor_recorded)} of closed deals`);
+    if (t.reason_recorded != null && t.reason_recorded < 0.6) gaps.push(`a loss reason is recorded on only ${pct(t.reason_recorded)} of lost deals`);
+    if (gaps.length) {
+      const c = h('div', 'callout');
+      c.appendChild(h('span', null, `Read the next two steps with care: ${gaps.join(', and ')}.`));
+      const a = h('a', null, 'Fix in Data quality');
+      a.href = '/quality?issue=' + (t.competitor_recorded != null && t.competitor_recorded < 0.6 ? 'missing_competitor' : 'missing_loss_reason');
+      c.appendChild(a);
+      box.appendChild(c);
+    }
   }
 
   /* ---------------------------------------------------------------- breakdowns */
@@ -177,7 +188,9 @@
       const wr = h('td'); wr.appendChild(meter(g.win_rate, `Win rate against ${g.competitor}: ${pct(g.win_rate)}`)); tr.appendChild(wr);
       tr.appendChild(h('td', 'num', money(g.won_value)));
       tr.appendChild(h('td', 'num', money(g.lost_value)));
-      tr.appendChild(h('td', 'small', g.top_reasons.map(r => `${r.reason} (${r.count})`).join(' · ') || '—'));
+      const reasons = h('td', 'small reasons', g.top_reasons.slice(0, 2).map(r => `${r.reason} (${r.count})`).join(' · ') || '—');
+      reasons.title = g.top_reasons.map(r => `${r.reason} (${r.count})`).join(' · ');
+      tr.appendChild(reasons);
       tr.appendChild(h('td', 'num', g.secondary ? fmt.int(g.secondary) : '—'));
       body.appendChild(tr);
     });

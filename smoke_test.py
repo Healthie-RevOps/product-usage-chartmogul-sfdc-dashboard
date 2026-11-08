@@ -157,10 +157,10 @@ check("/customer/<missing> -> 404", client.get("/customer/nope").status_code, 40
 check("/api/account/<missing> -> 404", client.get("/api/account/001xxx").status_code, 404)
 check("static CSS served", client.get("/static/app.css").status_code, 200)
 r = client.get("/products", follow_redirects=False)
-check("old /products redirects", (r.status_code, r.headers.get("location")), (301, "/"))
+check("old /products redirects", (r.status_code, r.headers.get("location")), (301, "/explorer"))
 r = client.get("/product?product=Group+Plan&view=former", follow_redirects=False)
 check("old /product redirects to explorer",
-      r.headers.get("location"), "/?product=Group%20Plan&view=former")
+      r.headers.get("location"), "/explorer?product=Group%20Plan&view=former")
 
 print("\nexplorer data:")
 prods = {p["product"]: p for p in client.get("/api/products").json()}
@@ -489,8 +489,16 @@ print("\nsync status, guides, tour:")
 from app import data as data_mod  # noqa: E402
 page = client.get("/enterprise").text
 check("top bar says when the data is from; Tour tab and scripts present",
-      ("Data as of" in page, 'id="tour-tab"' in page, "/static/tour.js" in page, 'data-guide="enterprise"' in page,
+      ("Data as of" in page, 'id="tour-tab"' in page, "/static/tour.js" in page, 'class="step-num"' in page,
        'id="empty-state"' in page), (True, True, True, True, True))
+r = client.get("/")
+check("home: four task cards with live numbers", (r.status_code, r.text.count('class="task"'),
+      "paying Enterprise accounts" in r.text, "win rate" in r.text), (200, 4, True, True))
+r = client.get("/?product=Group+Plan&view=former", follow_redirects=False)
+check("old explorer links on / redirect to /explorer", (r.status_code, r.headers["location"]),
+      (302, "/explorer?product=Group+Plan&view=former"))
+check("every task page ends with a 'Use this list' step",
+      all('id="step-use"' in client.get(u).text for u in ("/explorer", "/enterprise", "/deals", "/quality")), True)
 check("APIs report has_data", (client.get("/api/enterprise").json()["has_data"],
                                client.get("/api/deals").json()["has_data"],
                                client.get("/api/quality").json()["has_data"]), (True, True, True))

@@ -274,17 +274,6 @@ table.breakdown tr.clickable:focus-visible { outline: 2px solid var(--purple); o
 .sync-dot.busy { background: var(--light-blue); }
 .tab-btn { border: 0; background: transparent; cursor: pointer; font: inherit; }
 
-/* ---- "What you can do here" guide ---- */
-.guide { background: var(--card); border: 1px solid var(--line); border-left: 3px solid var(--purple);
-  border-radius: var(--radius); padding: 12px 16px; margin: -4px 0 14px; }
-.guide-head { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
-.guide-head b { font-size: 13px; }
-.guide-head .spacer { flex: 1; }
-.guide ul { margin: 4px 0 6px; padding-left: 18px; }
-.guide li { margin: 3px 0; }
-.guide li b { font-weight: 700; }
-.page-head .linklike { margin-left: auto; }
-
 /* ---- empty state ---- */
 .empty-card { max-width: 720px; margin: 8px auto 16px; padding: 22px 24px; }
 .empty-card .empty-title { font-size: 17px; margin: 0 0 8px; text-transform: none; letter-spacing: 0; }
@@ -311,3 +300,88 @@ table.breakdown tr.clickable:focus-visible { outline: 2px solid var(--purple); o
   box-shadow: 0 10px 30px rgba(8,15,30,.25); font-size: 13px; }
 .tour-offer .btn:not(.primary) { background: rgba(255,255,255,.1); color: #fff; border-color: rgba(255,255,255,.25); }
 @media (prefers-reduced-motion: reduce) { .tour-spot { transition: none; } }
+
+/* =====================================================================
+ * Guided layout (2026-11-08): every page is a sequence of numbered steps
+ * (1 Choose -> 2 Find -> 3 Review -> 4 Use this list), each saying what to do.
+ * ===================================================================== */
+.page { padding-top: 26px; }
+.page-head { margin: 0 0 20px; align-items: baseline; }
+.page-head h1 { font-size: 26px; }
+.page-head .sub { font-size: 14.5px; max-width: 760px; }
+
+.step { background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+  padding: 20px 24px 22px; margin-bottom: 20px; }
+.step-head { display: flex; align-items: flex-start; gap: 14px; margin-bottom: 16px; flex-wrap: wrap; }
+.step-num { flex: none; width: 28px; height: 28px; border-radius: 50%; background: var(--purple);
+  color: #fff; font-weight: 800; font-size: 14px; display: grid; place-items: center; margin-top: 1px; }
+.step-titles { flex: 1; min-width: 240px; }
+.step-titles h2 { font-size: 17px; font-weight: 800; margin: 0; letter-spacing: -.005em; color: var(--navy);
+  display: flex; align-items: center; gap: 8px; }
+.step-titles .hint { color: var(--muted); font-size: 13.5px; margin-top: 3px; }
+.step-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-left: auto; }
+.step .table-wrap { border-top: 1px solid var(--line); }
+.step .kpis { margin-bottom: 18px; }
+.step-sub { font-size: 13px; font-weight: 700; color: var(--slate); margin: 18px 0 8px; }
+
+/* labeled filter fields */
+.fields { display: flex; flex-wrap: wrap; gap: 14px 16px; align-items: flex-end; }
+.field { display: flex; flex-direction: column; gap: 5px; }
+.field > label, .field > .label { font-size: 11.5px; font-weight: 700; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .04em; }
+.field select, .field input[type=search], .field input[type=date] { min-width: 170px; }
+.field input[type=search] { width: 240px; }
+.fields .linklike { margin-bottom: 9px; }
+
+/* number tiles: one primary, the rest supporting */
+.kpis { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; }
+.kpi { padding: 14px 16px; border-radius: 10px; background: var(--bg); border-color: transparent; }
+.kpi.primary { background: var(--purple-tint); }
+.kpi.primary .value { color: var(--purple-dark); font-size: 28px; }
+.kpi .value { font-size: 23px; }
+
+/* calm tables */
+table.data td { padding: 10px 10px; }
+table.data th { padding: 9px 10px; }
+.table-wrap { max-height: 640px; }
+
+/* callout linking to another page */
+.callout { display: flex; gap: 12px; align-items: center; background: var(--amber-tint); color: var(--amber);
+  border-radius: 10px; padding: 10px 14px; font-size: 13.5px; margin: -4px 0 18px; }
+.callout a { color: var(--amber); font-weight: 700; text-decoration: underline; }
+
+/* "Use this list": every export, with what it's for and where it goes */
+.uses { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 14px; }
+.use { border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; display: flex;
+  flex-direction: column; gap: 8px; background: #fff; }
+.use h3 { font-size: 15px; margin: 0; }
+.use p { margin: 0; color: var(--slate); font-size: 13.5px; }
+.use .where { color: var(--muted); font-size: 12.5px; }
+.use .btn { align-self: flex-start; margin-top: auto; }
+.use.soon { background: var(--bg); border-style: dashed; }
+.use.soon h3::after { content: "Coming soon"; margin-left: 8px; font-size: 11px; font-weight: 700;
+  color: var(--muted); background: #fff; border: 1px solid var(--line); border-radius: 999px; padding: 1px 8px;
+  vertical-align: 2px; }
+.scope-note { font-size: 13px; color: var(--slate); margin: 0 0 14px; }
+.scope-note b { color: var(--navy); }
+
+/* ---- home ---- */
+.home-hero { margin: 8px 0 24px; }
+.home-hero h1 { font-size: 30px; margin: 0 0 6px; letter-spacing: -.015em; }
+.home-hero p { color: var(--muted); font-size: 15.5px; margin: 0; max-width: 760px; }
+.tasks { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 18px; margin-bottom: 26px; }
+.task { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 22px 22px 20px;
+  display: flex; flex-direction: column; gap: 10px; color: var(--navy); transition: border-color .15s, box-shadow .15s; }
+.task:hover { border-color: var(--purple); box-shadow: 0 8px 24px rgba(85,43,216,.10); text-decoration: none; }
+.task .q { font-size: 18px; font-weight: 800; letter-spacing: -.005em; }
+.task .what { color: var(--slate); font-size: 14px; }
+.task .stat { font-size: 13px; color: var(--muted); }
+.task .stat b { font-size: 22px; color: var(--purple-dark); display: block; font-weight: 800; letter-spacing: -.01em; }
+.task .go { margin-top: auto; font-weight: 700; color: var(--purple); }
+.task .tagline { font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.flow { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+@media (max-width: 900px) { .flow { grid-template-columns: 1fr; } }
+.flow .step ul { margin: 0; padding-left: 18px; }
+.flow .step li { margin: 6px 0; color: var(--slate); }
+.flow .step li b { color: var(--navy); }
+table.breakdown td.reasons { max-width: 340px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

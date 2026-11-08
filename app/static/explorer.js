@@ -159,12 +159,10 @@
     el.textContent = '';
     const scope = state.products.length ? (state.products.length === 1 ? state.products[0] : `${state.products.length} products`) : 'all products';
     const tiles = [
-      ['Current customers', fmt.int(t.current), scope],
-      ['Former customers', fmt.int(t.former), 'held it, none live now'],
-      ['MRR', fmt.money(t.product_mrr), `${state.view} customers in view`],
-      ['ARR', fmt.money(t.product_mrr * 12), 'MRR × 12'],
-      ['Contract value', fmt.money((t.contract_value || 0) * 100), 'latest won opp, accounts in view'],
-      ['Active users', fmt.int(t.active_users), 'Healthie users at accounts in view'],
+      ['Current customers', fmt.int(t.current), `${scope} · ${fmt.int(t.former)} former`, 'primary'],
+      ['MRR', fmt.money(t.product_mrr), `ARR ${fmt.money(t.product_mrr * 12)}`],
+      ['Contract value', fmt.money((t.contract_value || 0) * 100), 'latest won deal per account'],
+      ['Active users', fmt.int(t.active_users), 'Healthie users at these customers'],
     ];
     if (t.unmatched) tiles.push(['Not in Salesforce', fmt.int(t.unmatched), 'no account matched', 'warn']);
     tiles.forEach(([label, value, note, cls]) => {
@@ -424,13 +422,13 @@
     }
     $('contact-note').textContent = r.total > state.contacts.length
       ? `Showing ${fmt.int(state.contacts.length)} of ${fmt.int(r.total)}. “Export all” includes every one.` : '';
-    $('export-contacts-all').textContent = `↓ Export all (${fmt.int(r.total)})`;
+    $('export-contacts-all').textContent = `↓ Download all ${fmt.int(r.total)} contacts`;
     contactSelectionChanged();
   }
   function contactSelectionChanged() {
     const n = state.selectedContacts.size;
     const b = $('export-contacts-selected');
-    b.disabled = n === 0; b.textContent = n ? `↓ Export selected (${fmt.int(n)})` : '↓ Export selected';
+    b.disabled = n === 0; b.textContent = n ? `↓ Download ${fmt.int(n)} ticked` : '↓ Download ticked';
     const all = state.contacts.length && state.contacts.every(c => state.selectedContacts.has(c.id));
     $('check-all-contacts').checked = !!all;
     $('check-all-contacts').indeterminate = !all && n > 0;

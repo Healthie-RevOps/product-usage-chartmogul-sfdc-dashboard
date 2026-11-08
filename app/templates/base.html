@@ -7,7 +7,7 @@
 <link rel="icon" href="/static/healthie-mark.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/app.css?v=10">
+<link rel="stylesheet" href="/static/app.css?v=11">
 </head>
 <body>
 <header class="topbar">
@@ -16,11 +16,11 @@
     <span>Product Explorer</span>
   </a>
   <nav class="tabs" aria-label="Sections">
-    <a class="tab {% block nav_explorer %}{% endblock %}" href="/">Explorer</a>
-    <a class="tab {% block nav_enterprise %}{% endblock %}" href="/enterprise">Enterprise</a>
+    <a class="tab {% block nav_home %}{% endblock %}" href="/">Home</a>
+    <a class="tab {% block nav_explorer %}{% endblock %}" href="/explorer">Products</a>
+    <a class="tab {% block nav_enterprise %}{% endblock %}" href="/enterprise">Enterprise add-ons</a>
     <a class="tab {% block nav_deals %}{% endblock %}" href="/deals">Win / loss</a>
     <a class="tab {% block nav_quality %}{% endblock %}" href="/quality">Data quality</a>
-    <button class="tab tab-btn" id="tour-tab" type="button" title="A two-minute walkthrough of the app">Tour</button>
   </nav>
   <div class="topbar-right">
     {% if sync %}
@@ -28,6 +28,7 @@
       <i class="sync-dot {% if sync.running_since %}busy{% elif sync.last_failed or not sync.data_as_of %}bad{% endif %}"></i>{% if sync.data_as_of %}Data as of {{ sync.data_as_of_label }}{% else %}No data yet{% endif %}{% if sync.running_since %} · sync running{% elif sync.last_failed %} · last sync failed{% endif %}
     </span>
     {% endif %}
+    <button class="btn ghost small" id="tour-tab" type="button" title="A two-minute walkthrough of the app">Take the tour</button>
     {% if user %}<span title="{{ user.email }}">{{ user.name }}</span>{% endif %}
     {% if user and not insecure %}
     <form method="post" action="/logout"><button class="btn ghost small" type="submit">Sign out</button></form>
@@ -39,8 +40,8 @@
 {% block content %}{% endblock %}
 </main>
 <script src="/static/charts.js?v=5"></script>
-<script src="/static/common.js?v=1"></script>
-<script src="/static/tour.js?v=1"></script>
+<script src="/static/common.js?v=2"></script>
+<script src="/static/tour.js?v=3"></script>
 {% block scripts %}{% endblock %}
 </body>
 </html>

@@ -212,8 +212,13 @@ ALLOW_INSECURE_NO_AUTH=1 uvicorn app.main:app --reload   # skip Google sign-in l
 - `/product?product=…&view=current|former|all`: customers on that product (product MRR, total MRR, contract value/end,
   usage, health, owner) + active users with name/email/phone
 - `/product/users.csv?product=…&view=…`: full active-user export for that product
+- `/` (Home): "What do you want to do?" Four task cards with a live number each, plus where the data
+  comes from and where it can go. Old explorer links with filters (`/?product=…`) redirect to `/explorer`.
+- `/explorer` (Products): customers by product with search / status / match filters, charts, contacts.
 - `/customer/{cm_uuid}`: products, usage figures, contracts, contacts with active-user flag
-- `/`: customer list with search / product / status / match filters
+- **Layout convention:** every task page is a sequence of numbered steps (choose → find / review →
+  act), each with a one-line instruction, ending in a **"Use this list"** step that says what each
+  download contains and where it goes (e.g. HubSpot import). Keep new pages to this pattern.
 - `/enterprise`: Enterprise add-on adoption. One row per Enterprise SFDC account, one column per
   add-on (AI Scribe, Bridge, Visualize+, API, E-Rx, full/semi white label, sub-orgs, Zoom,
   HubSpot, Shopify), each cell **Has it / In pipeline / Lost / Not pitched**. Replaces the SFDC
@@ -233,9 +238,9 @@ ALLOW_INSECURE_NO_AUTH=1 uvicorn app.main:app --reload   # skip Google sign-in l
   spelling variants merge; loss reasons drop the `R:`/`NR:` prefix into a separate
   regrettable / non-regrettable field.
 
-- **Tour** tab (any page): a 15-step guided walkthrough of all four sections (`app/static/tour.js`),
-  offered once on a person's first visit. Each page also has a "What you can do here" panel, and
-  pages explain when their data hasn't loaded yet (last good sync, a sync in progress, next run).
+- **Take the tour** (top bar, any page): a guided walkthrough of every section (`app/static/tour.js`),
+  offered once on a person's first visit. Pages explain when their data hasn't loaded yet (last good
+  sync, a sync in progress, next run).
 - `/quality` (Data quality): a Salesforce fix list with an owner per fix. Deal rules: closed
   new-sales deal with no competitor answer, lost deal with no loss reason, lost add-on deal with
   no add-on loss reason, Expansion Deal with no Expansion Product (with a suggestion from the
