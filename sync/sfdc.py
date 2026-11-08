@@ -150,6 +150,65 @@ ACCOUNT_USAGE_FIELDS = {
     "sfdc_arr": "ARR__c",
 }
 
+# Enterprise attributes: the fields behind the "Enterprise Customer Attribute Reporting"
+# report (verified 2026-11-08 via describe).
+ACCOUNT_ENTERPRISE_FIELDS = {
+    "current_plan": "Current_Plan__c",
+    "customer_status": "Customer_Status__c",
+    "sfdc_mrr": "MRR__c",
+    "implementation_status": "Implementation_Status__c",
+    "csm_name": "CSM_v2__r.Name",
+    "website": "Website",
+    "renewal_date": "Renewal_Date__c",
+    "healthie_org_count": "Count_of_Healthie_Orgs__c",
+    "account_segment": "Account_Segment__c",
+    "enterprise_category": "Enterprise_Category__c",   # multi-select, ";"-separated
+    "current_ehr": "Current_EMR_EHR__c",
+    "kickoff_date": "X1_Kickoff_Discovery_Date__c",
+}
+
+# Add-on checkboxes synced into SFDC from Stripe (same report). Column -> field.
+ACCOUNT_ADDON_FIELDS = {
+    "has_active_client": "Stripe_Has_Active_Client__c",
+    "has_sub_org": "Stripe_Has_Additional_Sub_Org__c",
+    "has_ai_scribe": "Stripe_Has_AI_Scribe__c",
+    "has_api_access": "Stripe_Has_API_Access__c",
+    "has_erx": "Stripe_Has_E_Rx_Dosespot__c",
+    "has_full_white_label": "Stripe_Has_Full_White_Label__c",
+    "has_semi_white_label": "Stripe_Has_Semi_White_Label__c",
+    "has_hubspot": "Stripe_Has_Hubspot__c",
+    "has_shopify": "Stripe_Has_Shopify__c",
+    "has_standard_seats": "Stripe_Has_Standard_Seats__c",
+    "has_support_seats": "Stripe_Has_Support_Seats__c",
+    "has_zoom": "Stripe_Has_Zoom__c",
+}
+
+ACCOUNT_OPTIONAL_FIELDS = {**ACCOUNT_USAGE_FIELDS, **ACCOUNT_ENTERPRISE_FIELDS,
+                           **ACCOUNT_ADDON_FIELDS}
+
+# Opportunity fields behind the Scribe/Bridge/Vis+ open opps, add-on closed lost, and
+# competitor reports. Always-present standard fields are in fetch_opportunities.
+OPPORTUNITY_OPTIONAL_FIELDS = {
+    "year1_acv": "Year_1_ACV__c",
+    "arr_delta": "ARR_Delta__c",
+    "loss_reason": "Loss_Reason__c",
+    "loss_reason_detail": "Loss_Reason_Detail__c",
+    "addon_loss_reason": "Add_On_Close_Lost_Reason__c",
+    "why_won": "Why_did_we_win__c",
+    "competitor": "Competitor__c",
+    "secondary_competitor": "Secondary_Competitor__c",
+    "competitor_text": "Competitor_Free_Text__c",       # labelled "Primary Competitor"
+    "incumbent": "Incumbent__c",
+    "competition": "Competition__c",
+    "current_situation": "Current_Situation__c",
+    "expansion_product": "Expansion_Product__c",
+    "expansion_product_text": "Expansion_Product_Text__c",
+    "additional_products": "Additional_Product_s__c",
+    "target_price": "Customer_Target_Price__c",
+    "value_gap": "Perceived_Value_Gap__c",
+    "revisit_date": "Revisit_Later_Date__c",
+}
+
 CHUNK = 300  # ids per IN (...) clause; keeps SOQL well under the 100k-char limit
 
 
@@ -160,19 +219,37 @@ def _visible_fields(sobject: str) -> set[str]:
     return {f["name"] for f in desc["fields"]}
 
 
-_usage_cache: dict = {}
+def _base_field(expr: str) -> str:
+    """Field to check visibility for: "CSM_v2__r.Name" -> "CSM_v2__c"."""
+    head = expr.split(".")[0]
+    return head[:-3] + "__c" if "." in expr and head.endswith("__r") else head
 
 
-def _usage_fields() -> dict:
-    """ACCOUNT_USAGE_FIELDS minus any the logged-in user can't see (checked once)."""
-    if not _usage_cache:
-        visible = _visible_fields("Account")
-        _usage_cache.update({c: f for c, f in ACCOUNT_USAGE_FIELDS.items() if f in visible})
-        hidden = sorted(set(ACCOUNT_USAGE_FIELDS.values()) - set(_usage_cache.values()))
+def _read(rec: dict, expr: str):
+    """Value of a (possibly dotted relationship) field from a SOQL record."""
+    for part in expr.split("."):
+        rec = (rec or {}).get(part)
+    return rec
+
+
+_optional_cache: dict = {}
+
+
+def _optional_fields(sobject: str, fields: dict) -> dict:
+    """`fields` minus any the logged-in user can't see (checked once per object).
+    Field-level security differs per user; skipping beats failing the whole sync."""
+    if sobject not in _optional_cache:
+        visible = _visible_fields(sobject)
+        ok = {c: f for c, f in fields.items() if _base_field(f) in visible}
+        hidden = sorted(f for f in fields.values() if _base_field(f) not in visible)
         if hidden:
-            log.warning("Account usage fields not visible to this SFDC user, skipped: %s",
-                        hidden)
-    return _usage_cache
+            log.warning("%s fields not visible to this SFDC user, skipped: %s", sobject, hidden)
+        _optional_cache[sobject] = ok
+    return _optional_cache[sobject]
+
+
+def account_field_visible(column: str) -> bool:
+    return column in _optional_fields("Account", ACCOUNT_OPTIONAL_FIELDS)
 
 
 def _chunks(ids: list[str]):
@@ -195,14 +272,12 @@ def fetch_accounts_for(stripe_ids, org_ids):
 
 def fetch_accounts(where: str | None = None):
     """Accounts matching `where`; default: any account with a Stripe ID or Org ID."""
-    # Field-level security differs per user; drop optional usage fields this one can't see
-    # rather than failing the whole sync.
-    usage = _usage_fields()
-    usage_cols = "".join(f", {f}" for f in usage.values())
+    optional = _optional_fields("Account", ACCOUNT_OPTIONAL_FIELDS)
+    optional_cols = "".join(f", {f}" for f in optional.values())
     where = where or f"{ACCOUNT_ORG_ID_FIELD} != null OR {ACCOUNT_STRIPE_ID_FIELD} != null"
     soql = (
         f"SELECT Id, Name, {ACCOUNT_ORG_ID_FIELD}, {ACCOUNT_STRIPE_ID_FIELD}, "
-        f"Owner.Name, Type{usage_cols} FROM Account WHERE {where}"
+        f"Owner.Name, Type{optional_cols} FROM Account WHERE {where}"
     )
     for rec in _query_all(soql):
         row = {
@@ -213,8 +288,10 @@ def fetch_accounts(where: str | None = None):
             "owner_name": (rec.get("Owner") or {}).get("Name"),
             "account_type": rec.get("Type"),
         }
-        for col, field in ACCOUNT_USAGE_FIELDS.items():
-            row[col] = rec.get(field)
+        for col, field in ACCOUNT_OPTIONAL_FIELDS.items():
+            row[col] = _read(rec, field) if col in optional else None
+        for col in ACCOUNT_ADDON_FIELDS:
+            row[col] = bool(row[col])
         yield row
 
 
@@ -225,7 +302,8 @@ def fetch_contacts(account_ids: list[str]):
         soql = (
             "SELECT Id, AccountId, Name, Email, Title, Phone, MobilePhone, "
             "Healthie_User_ID__c, Healthie_User_Active__c, Healthie_User_Type__c, "
-            "Healthie_User_Last_Active__c, Healthie_Org_Admin__c, Healthie_Org_Owner__c "
+            "Healthie_User_Last_Active__c, Healthie_Org_Admin__c, Healthie_Org_Owner__c, "
+            "HasOptedOutOfEmail "
             f"FROM Contact WHERE AccountId IN ({ids})"
         )
         for rec in _query_all(soql):
@@ -243,6 +321,7 @@ def fetch_contacts(account_ids: list[str]):
                 "last_active": rec.get("Healthie_User_Last_Active__c"),
                 "is_org_admin": bool(rec.get("Healthie_Org_Admin__c")),
                 "is_org_owner": bool(rec.get("Healthie_Org_Owner__c")),
+                "email_opt_out": bool(rec.get("HasOptedOutOfEmail")),
             }
 
 
@@ -269,6 +348,41 @@ def fetch_contracts(account_ids: list[str]):
                 "contract_end": rec.get("Contract_End_Date__c"),
                 "term_months": rec.get("Contract_Term_months__c"),
             }
+
+
+def fetch_opportunities(closed_since: str):
+    """Every open Opportunity, plus every closed one with CloseDate >= closed_since (any
+    stage, record type, or account, matched to ChartMogul or not: lost prospects matter).
+    Account name comes along so opps don't depend on the account being synced."""
+    optional = _optional_fields("Opportunity", OPPORTUNITY_OPTIONAL_FIELDS)
+    optional_cols = "".join(f", {f}" for f in optional.values())
+    soql = (
+        "SELECT Id, AccountId, Account.Name, Name, RecordType.Name, Type, StageName, "
+        "IsClosed, IsWon, CloseDate, CreatedDate, Amount, Probability, NextStep, "
+        f"Owner.Name{optional_cols} FROM Opportunity "
+        f"WHERE IsClosed = false OR CloseDate >= {closed_since}"
+    )
+    for rec in _query_all(soql):
+        row = {
+            "id": rec["Id"],
+            "account_id": rec.get("AccountId"),
+            "account_name": _read(rec, "Account.Name"),
+            "name": rec.get("Name"),
+            "record_type": _read(rec, "RecordType.Name"),
+            "opp_type": rec.get("Type"),
+            "stage": rec.get("StageName"),
+            "is_closed": bool(rec.get("IsClosed")),
+            "is_won": bool(rec.get("IsWon")),
+            "close_date": rec.get("CloseDate"),
+            "created_date": rec.get("CreatedDate"),
+            "amount": rec.get("Amount"),
+            "probability": rec.get("Probability"),
+            "next_step": rec.get("NextStep"),
+            "owner_name": _read(rec, "Owner.Name"),
+        }
+        for col, field in OPPORTUNITY_OPTIONAL_FIELDS.items():
+            row[col] = rec.get(field) if col in optional else None
+        yield row
 
 
 def _as_str(v):

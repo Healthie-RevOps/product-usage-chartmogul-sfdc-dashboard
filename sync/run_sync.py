@@ -6,7 +6,9 @@
      only the listed product families.
   2. SFDC: only the Accounts whose Stripe Customer ID / Healthie Org ID came back in step 1
      (not all ~212k accounts with a Stripe ID).
-  3. Match, then contacts + closed-won contracts for matched accounts.
+  3. Match, then contacts + closed-won contracts for synced accounts. Enterprise-plan
+     accounts are synced too, even with no ChartMogul match.
+  3b. SFDC opportunities: all open + closed since SFDC_OPPS_CLOSED_SINCE, any account.
   4. Healthie org usage from Metabase (sync/metabase.py), if configured. Separate
      transaction, non-fatal, and runs even if steps 1-3 failed.
 
@@ -30,8 +32,8 @@ from datetime import date, datetime, timezone
 from dateutil import parser as dtparse
 
 from app.db import (
-    Activity, Customer, ProductMrr, SfdcAccount, SfdcContact, SfdcContract, Subscription,
-    SyncRun, init_db, session_scope,
+    Activity, Customer, ProductMrr, SfdcAccount, SfdcContact, SfdcContract, SfdcOpportunity,
+    Subscription, SyncRun, init_db, session_scope,
 )
 from sync import chartmogul as cm
 from sync import metabase
@@ -44,6 +46,8 @@ CUSTOMER_STATUSES = [s.strip() for s in
                      os.environ.get("CM_CUSTOMER_STATUSES", "Active,Cancelled").split(",") if s.strip()]
 PRODUCT_FILTER = {p.strip().lower() for p in
                   os.environ.get("CM_PRODUCT_FILTER", "").split(",") if p.strip()}
+# Closed opportunities older than this are skipped (open ones are always synced)
+OPPS_CLOSED_SINCE = os.environ.get("SFDC_OPPS_CLOSED_SINCE", "2024-01-01")
 # Whole-snapshot retries when ChartMogul is down (see _snapshot_with_retry)
 SNAPSHOT_ATTEMPTS = int(os.environ.get("SYNC_SNAPSHOT_ATTEMPTS", "2"))
 SNAPSHOT_RETRY_WAIT_S = int(os.environ.get("SYNC_SNAPSHOT_RETRY_WAIT_S", "1800"))
@@ -64,8 +68,8 @@ def _d(value):
 
 
 def _clear(session):
-    for model in (SfdcContract, SfdcContact, Activity, Subscription, Customer, SfdcAccount,
-                  ProductMrr):
+    for model in (SfdcOpportunity, SfdcContract, SfdcContact, Activity, Subscription, Customer,
+                  SfdcAccount, ProductMrr):
         session.query(model).delete()
     session.flush()
 
@@ -202,14 +206,31 @@ def sync_sfdc_accounts(session) -> int:
     keys = session.query(Customer.stripe_customer_id, Customer.healthie_org_id).all()
     stripe_ids = {k[0] for k in keys if k[0]}
     org_ids = {k[1] for k in keys if k[1]}
-    n = 0
+    seen = set()
     for a in sfdc.fetch_accounts_for(stripe_ids, org_ids):
-        session.add(SfdcAccount(**a))
-        n += 1
-    session.flush()
+        _add_account(session, a)
+        seen.add(a["id"])
     log.info("Fetched %d SFDC accounts for %d Stripe IDs / %d Org IDs",
-             n, len(stripe_ids), len(org_ids))
-    return n
+             len(seen), len(stripe_ids), len(org_ids))
+
+    # Enterprise accounts are the focus of the enterprise views; include the ones whose
+    # Stripe/Org ID doesn't match a ChartMogul customer too.
+    extra = 0
+    if sfdc.account_field_visible("current_plan"):
+        for a in sfdc.fetch_accounts("Current_Plan__c = 'Enterprise'"):
+            if a["id"] not in seen:
+                _add_account(session, a)
+                seen.add(a["id"])
+                extra += 1
+        log.info("Added %d Enterprise-plan SFDC accounts with no ChartMogul match", extra)
+    session.flush()
+    return len(seen)
+
+
+def _add_account(session, a: dict) -> None:
+    for k in ("renewal_date", "kickoff_date"):
+        a[k] = _d(a.get(k))
+    session.add(SfdcAccount(**a))
 
 
 def match(session) -> tuple[int, int]:
@@ -234,10 +255,9 @@ def match(session) -> tuple[int, int]:
 
 
 def sync_sfdc_details(session) -> tuple[int, int]:
-    """Contacts + contracts, only for accounts joined to a ChartMogul customer."""
-    account_ids = [r[0] for r in session.query(Customer.sfdc_account_id)
-                   .filter(Customer.sfdc_account_id.isnot(None)).distinct()]
-    log.info("Fetching contacts + contracts for %d matched accounts", len(account_ids))
+    """Contacts + contracts for synced accounts (matched to ChartMogul, or Enterprise)."""
+    account_ids = [r[0] for r in session.query(SfdcAccount.id)]
+    log.info("Fetching contacts + contracts for %d accounts", len(account_ids))
 
     n_contacts = 0
     for c in sfdc.fetch_contacts(account_ids):
@@ -258,6 +278,20 @@ def sync_sfdc_details(session) -> tuple[int, int]:
     return n_contacts, n_contracts
 
 
+def sync_sfdc_opportunities(session) -> int:
+    n = 0
+    for o in sfdc.fetch_opportunities(OPPS_CLOSED_SINCE):
+        for k in ("close_date", "revisit_date"):
+            o[k] = _d(o[k])
+        o["created_date"] = _dt(o["created_date"])
+        session.add(SfdcOpportunity(**o))
+        n += 1
+        if n % 5000 == 0:
+            session.flush()
+    log.info("Fetched %d SFDC opportunities (open, or closed since %s)", n, OPPS_CLOSED_SINCE)
+    return n
+
+
 def _snapshot(run_id: int) -> None:
     """ChartMogul + SFDC in one transaction: all or nothing, so the dashboard keeps
     serving the previous snapshot if any step fails."""
@@ -271,11 +305,12 @@ def _snapshot(run_id: int) -> None:
         n_match, n_unmatch = match(session)
         session.flush()
         n_contact, n_contract = sync_sfdc_details(session)
+        n_opp = sync_sfdc_opportunities(session)
         run = session.get(SyncRun, run_id)
         run.status = "success"
         run.finished_at = datetime.now(timezone.utc)
         run.accounts_synced, run.contacts_synced = n_acct, n_contact
-        run.contracts_synced = n_contract
+        run.contracts_synced, run.opportunities_synced = n_contract, n_opp
         run.customers_synced, run.subscriptions_synced = n_cust, n_sub
         run.matched, run.unmatched = n_match, n_unmatch
 

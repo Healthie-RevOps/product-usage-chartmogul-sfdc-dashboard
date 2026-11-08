@@ -31,7 +31,7 @@ SFDC credentials.
    `SECURITY_TOKEN` vars. That user can't see `Product_Adoption_Score__c`. The sync skips
    hidden optional fields with a warning.
 2. ~~ChartMogul API key~~: done. The read-only key from `healthie-bottoms-up-model` is set on `sync` (verified 2026-11-02).
-3. ~~Set the `sync` cron schedule~~: done in the Railway UI (`0 9 * * *`).
+3. **Move the `sync` cron to `0 12 * * *`** in the Railway UI (09:00 UTC runs fail on ChartMogul; see Deploy).
 4. `DASH_USER`/`DASH_PASS` on `web` now only gate `/api/*` (machine access).
 5. **The GitHub repo is public.** No secrets are committed, but consider making it private.
 
@@ -43,6 +43,22 @@ SFDC credentials.
 - `Account.Active_Standard_Users_Account__c`: ~9.6k of 59k Stripe-linked accounts. `Healthie_Active_Clients_Account__c`: only ~300.
 - Opportunity contract fields: TCV is on ~7k won opps; Year-1 ACV ~1.4k; contract end date ~950.
   "Contract value" = TCV, else Year-1 ACV, else Amount, from the most recent won opp.
+
+### Salesforce opportunities and Enterprise attributes (added 2026-11-08)
+Synced to replace a CS teammate's Salesforce reports (Enterprise Customer Attribute
+Reporting; Scribe/Bridge/Vis+ open opps; Add-On Closed Lost; Competitor Field Opportunities):
+- `sfdc_opportunities`: **every** open opp plus every opp closed since
+  `SFDC_OPPS_CLOSED_SINCE` (default `2024-01-01`), any stage, record type, or account,
+  including prospects with no ChartMogul match. Raw SFDC values; product detection and
+  competitor normalization belong in the app.
+- `sfdc_accounts` gains the Enterprise fields (plan, status, SFDC MRR, CSM, implementation
+  status, renewal date, segment, …) and the `Stripe_Has_*` add-on flags. Enterprise-plan
+  accounts are synced even without a ChartMogul match, and their contacts come along.
+- `sfdc_contacts.email_opt_out` (`HasOptedOutOfEmail`): exclude these from any campaign list.
+- Data quality: `Expansion_Product__c` is blank on most expansion deals (the SFDC report
+  matches products by opp name instead), and most closed-lost add-on deals have no
+  `Add_On_Close_Lost_Reason__c`. Competitor info is split across `Competitor__c`,
+  `Secondary_Competitor__c`, `Competitor_Free_Text__c`, `Incumbent__c`, `Competition__c`.
 
 **Usage caveat:** "active users on product X" means active Healthie users at accounts
 that pay for X. It does not mean those people use feature X. True per-product usage
