@@ -12,8 +12,17 @@
   4. Healthie org usage from Metabase (sync/metabase.py), if configured. Separate
      transaction, non-fatal, and runs even if steps 1-3 failed.
 
-If ChartMogul is unavailable, steps 1-3 are retried once after 30 min
-(SYNC_SNAPSHOT_ATTEMPTS / SYNC_SNAPSHOT_RETRY_WAIT_S).
+Stages commit separately, so a slow or failing ChartMogul never holds back or rolls back
+the Salesforce data (and vice versa):
+  A. ChartMogul. Incremental by default: the account-wide activity feed since the last
+     refresh (minus SYNC_OVERLAP_DAYS) says which customers changed (~30 a day of ~15k);
+     only those are refetched. Full refresh on SYNC_FULL_WEEKDAY (default Sunday), when
+     SYNC_FULL=1, or with no previous refresh to build on. ~1-2 min vs ~40 min full.
+  B. Salesforce: accounts, match, contacts + contracts, opportunities.
+  C. Metabase.
+If ChartMogul fails transiently, B and C still run, then A is retried once after
+SYNC_SNAPSHOT_RETRY_WAIT_S and customers are re-matched to accounts. A run with one failed
+stage is "partial": the dashboard shows what did refresh.
 
 Match waterfall (recorded per customer as match_method):
   1. stripe_id — ChartMogul external_id (cus_...) == Account.Stripe_Customer_ID__c
@@ -27,9 +36,11 @@ import logging
 import os
 import sys
 import time
-from datetime import date, datetime, timezone
+from concurrent.futures import ThreadPoolExecutor
+from datetime import date, datetime, timedelta, timezone
 
 from dateutil import parser as dtparse
+from sqlalchemy import desc
 
 from app.db import (
     Activity, Customer, ProductMrr, SfdcAccount, SfdcContact, SfdcContract, SfdcOpportunity,
@@ -48,9 +59,13 @@ PRODUCT_FILTER = {p.strip().lower() for p in
                   os.environ.get("CM_PRODUCT_FILTER", "").split(",") if p.strip()}
 # Closed opportunities older than this are skipped (open ones are always synced)
 OPPS_CLOSED_SINCE = os.environ.get("SFDC_OPPS_CLOSED_SINCE", "2024-01-01")
-# Whole-snapshot retries when ChartMogul is down (see _snapshot_with_retry)
+# ChartMogul stage attempts when ChartMogul is down (see main)
 SNAPSHOT_ATTEMPTS = int(os.environ.get("SYNC_SNAPSHOT_ATTEMPTS", "2"))
 SNAPSHOT_RETRY_WAIT_S = int(os.environ.get("SYNC_SNAPSHOT_RETRY_WAIT_S", "1800"))
+# Incremental ChartMogul refresh (see _cm_mode)
+FULL_WEEKDAY = int(os.environ.get("SYNC_FULL_WEEKDAY", "6"))     # Mon=0 .. Sun=6; -1 = never
+OVERLAP_DAYS = int(os.environ.get("SYNC_OVERLAP_DAYS", "2"))
+PRODUCT_MRR_RECENT_MONTHS = 3     # incremental runs refetch this many months of product MRR
 
 
 def _dt(value):
@@ -67,9 +82,18 @@ def _d(value):
     return dt.date() if dt else None
 
 
-def _clear(session):
-    for model in (SfdcOpportunity, SfdcContract, SfdcContact, Activity, Subscription, Customer,
-                  SfdcAccount, ProductMrr):
+def _clear_chartmogul(session):
+    for model in (Activity, Subscription, Customer, ProductMrr):
+        session.query(model).delete()
+    session.flush()
+
+
+def _clear_sfdc(session):
+    # Customers persist across runs now; unlink them before their accounts go away
+    session.query(Customer).update({Customer.sfdc_account_id: None,
+                                    Customer.match_method: "unmatched"},
+                                   synchronize_session=False)
+    for model in (SfdcOpportunity, SfdcContract, SfdcContact, SfdcAccount):
         session.query(model).delete()
     session.flush()
 
@@ -86,8 +110,75 @@ def _wanted(product: str | None) -> bool:
     return not PRODUCT_FILTER or (product or "").lower() in PRODUCT_FILTER
 
 
+def _store_customer(session, raw: dict, subs: list, acts: list,
+                    plan_names: dict) -> tuple[int, int] | None:
+    """Add one ChartMogul customer with its subscriptions and activities.
+    Returns (subscriptions, activities) stored, or None if filtered out."""
+    uuid = raw["uuid"]
+    rows = []
+    for sub in subs:
+        plan = sub.get("plan") or sub.get("plan_name")
+        product = cm.product_family(plan)
+        if not _wanted(product):
+            continue
+        end = _dt(sub.get("end-date") or sub.get("end_date"))
+        if end and end.tzinfo is None:
+            end = end.replace(tzinfo=timezone.utc)
+        rows.append(Subscription(
+            cm_uuid=sub["uuid"],
+            customer_uuid=uuid,
+            plan_name=plan,
+            product=product,
+            external_id=sub.get("external_id"),
+            status=sub.get("status"),
+            is_current=_is_current(sub.get("status"), end),
+            quantity=sub.get("quantity"),
+            mrr_cents=sub.get("mrr") or 0,
+            currency=sub.get("currency") or "USD",
+            billing_cycle=sub.get("billing-cycle") or sub.get("billing_cycle"),
+            start_date=_dt(sub.get("start-date") or sub.get("start_date")),
+            end_date=end,
+        ))
+    if PRODUCT_FILTER and not rows:
+        return None  # customer has none of the products we care about
+
+    session.add(Customer(
+        cm_uuid=uuid,
+        name=raw.get("name") or raw.get("company") or raw.get("email"),
+        email=raw.get("email"),
+        status=raw.get("status"),
+        customer_since=_dt(raw.get("customer-since") or raw.get("customer_since")),
+        mrr_cents=raw.get("mrr") or 0,
+        currency=raw.get("currency") or "USD",
+        stripe_customer_id=cm.extract_stripe_id(raw),
+        healthie_org_id=cm.extract_org_id(raw),
+        cm_url=raw.get("chartmogul-url") or raw.get("chartmogul_url"),
+    ))
+    session.add_all(rows)
+    for a in acts:
+        plan = plan_names.get(a.get("plan-external-id"))
+        session.add(Activity(
+            customer_uuid=uuid,
+            date=_dt(a.get("date")),
+            type=a.get("type"),
+            mrr_cents=a.get("activity-mrr"),
+            movement_cents=a.get("activity-mrr-movement"),
+            plan_external_id=a.get("plan-external-id"),
+            plan_name=plan,
+            product=cm.product_family(plan),
+            subscription_external_id=a.get("subscription-external-id"),
+            description=a.get("description"),
+        ))
+    return len(rows), len(acts)
+
+
+def _plan_names(plans: list[dict]) -> dict:
+    return {p["external_id"]: p["name"] for p in plans if p.get("external_id")}
+
+
 def sync_chartmogul(session, plans: list[dict]) -> tuple[int, int, int]:
-    plan_names = {p["external_id"]: p["name"] for p in plans if p.get("external_id")}
+    """Full refresh: every customer in CUSTOMER_STATUSES (caller clears the tables)."""
+    plan_names = _plan_names(plans)
     if PRODUCT_FILTER:
         families = {cm.product_family(p.get("name")) for p in plans}
         unknown = sorted(p for p in PRODUCT_FILTER
@@ -103,66 +194,11 @@ def sync_chartmogul(session, plans: list[dict]) -> tuple[int, int, int]:
     n_cust = n_sub = n_act = 0
     t0 = time.monotonic()
     for i, (uuid, subs, acts) in enumerate(cm.map_customer_details(list(by_uuid)), 1):
-        rows = []
-        for sub in subs:
-            plan = sub.get("plan") or sub.get("plan_name")
-            product = cm.product_family(plan)
-            if not _wanted(product):
-                continue
-            end = _dt(sub.get("end-date") or sub.get("end_date"))
-            if end and end.tzinfo is None:
-                end = end.replace(tzinfo=timezone.utc)
-            rows.append(Subscription(
-                cm_uuid=sub["uuid"],
-                customer_uuid=uuid,
-                plan_name=plan,
-                product=product,
-                external_id=sub.get("external_id"),
-                status=sub.get("status"),
-                is_current=_is_current(sub.get("status"), end),
-                quantity=sub.get("quantity"),
-                mrr_cents=sub.get("mrr") or 0,
-                currency=sub.get("currency") or "USD",
-                billing_cycle=sub.get("billing-cycle") or sub.get("billing_cycle"),
-                start_date=_dt(sub.get("start-date") or sub.get("start_date")),
-                end_date=end,
-            ))
-        if PRODUCT_FILTER and not rows:
-            continue  # customer has none of the products we care about
-
-        raw = by_uuid[uuid]
-        session.add(Customer(
-            cm_uuid=uuid,
-            name=raw.get("name") or raw.get("company") or raw.get("email"),
-            email=raw.get("email"),
-            status=raw.get("status"),
-            customer_since=_dt(raw.get("customer-since") or raw.get("customer_since")),
-            mrr_cents=raw.get("mrr") or 0,
-            currency=raw.get("currency") or "USD",
-            stripe_customer_id=cm.extract_stripe_id(raw),
-            healthie_org_id=cm.extract_org_id(raw),
-            cm_url=raw.get("chartmogul-url") or raw.get("chartmogul_url"),
-        ))
-        session.add_all(rows)
-        n_cust += 1
-        n_sub += len(rows)
-
-        for a in acts:
-            plan = plan_names.get(a.get("plan-external-id"))
-            session.add(Activity(
-                customer_uuid=uuid,
-                date=_dt(a.get("date")),
-                type=a.get("type"),
-                mrr_cents=a.get("activity-mrr"),
-                movement_cents=a.get("activity-mrr-movement"),
-                plan_external_id=a.get("plan-external-id"),
-                plan_name=plan,
-                product=cm.product_family(plan),
-                subscription_external_id=a.get("subscription-external-id"),
-                description=a.get("description"),
-            ))
-        n_act += len(acts)
-
+        stored = _store_customer(session, by_uuid[uuid], subs, acts, plan_names)
+        if stored:
+            n_cust += 1
+            n_sub += stored[0]
+            n_act += stored[1]
         if i % 500 == 0:
             rate = i / (time.monotonic() - t0)
             log.info("ChartMogul progress: %d/%d customers (%.0f/s, ~%.0f min left), "
@@ -174,20 +210,74 @@ def sync_chartmogul(session, plans: list[dict]) -> tuple[int, int, int]:
     return n_cust, n_sub, n_act
 
 
+def _status_wanted(status: str | None) -> bool:
+    return (status or "").lower() in {s.lower() for s in CUSTOMER_STATUSES}
+
+
+def sync_chartmogul_incremental(session, plans: list[dict], since: datetime) -> tuple[int, int, int]:
+    """Refetch only customers with ChartMogul activity since `since` (minus the overlap);
+    everyone else keeps last night's rows. A customer that left CUSTOMER_STATUSES (or was
+    deleted) is removed."""
+    start = (since - timedelta(days=OVERLAP_DAYS)).astimezone(timezone.utc)
+    changed = sorted({a.get("customer-uuid") for a in
+                      cm.iter_activities_since(start.strftime("%Y-%m-%dT%H:%M:%SZ"))
+                      if a.get("customer-uuid")})
+    log.info("ChartMogul incremental: %d customers with activity since %s",
+             len(changed), start.date().isoformat())
+    if not changed:
+        return 0, 0, 0
+    with ThreadPoolExecutor(max_workers=cm.WORKERS) as pool:
+        raws = dict(zip(changed, pool.map(cm.fetch_customer, changed)))
+    for i in range(0, len(changed), 500):
+        chunk = changed[i:i + 500]
+        session.query(Activity).filter(Activity.customer_uuid.in_(chunk)).delete(synchronize_session=False)
+        session.query(Subscription).filter(Subscription.customer_uuid.in_(chunk)).delete(synchronize_session=False)
+        session.query(Customer).filter(Customer.cm_uuid.in_(chunk)).delete(synchronize_session=False)
+    session.flush()
+    keep = [u for u in changed if raws.get(u) and _status_wanted(raws[u].get("status"))]
+    plan_names = _plan_names(plans)
+    n_cust = n_sub = n_act = 0
+    for uuid, subs, acts in cm.map_customer_details(keep):
+        stored = _store_customer(session, raws[uuid], subs, acts, plan_names)
+        if stored:
+            n_cust += 1
+            n_sub += stored[0]
+            n_act += stored[1]
+    log.info("ChartMogul incremental: refreshed %d customers (%d subscriptions, %d activities), "
+             "removed %d no longer Active/Cancelled", n_cust, n_sub, n_act, len(changed) - len(keep))
+    return n_cust, n_sub, n_act
+
+
 PRODUCT_MRR_START = os.environ.get("CM_HISTORY_START", "2016-01-01")
 
 
-def sync_product_mrr(session, plans: list[dict]) -> int:
-    """Monthly MRR per product from ChartMogul's metrics API (filtered to its plans)."""
+def _months_ago(n: int) -> date:
+    d = date.today().replace(day=1)
+    for _ in range(n):
+        d = (d - timedelta(days=1)).replace(day=1)
+    return d
+
+
+def sync_product_mrr(session, plans: list[dict], since_month: date | None = None) -> int:
+    """Monthly MRR per product from ChartMogul's metrics API (filtered to its plans).
+    since_month: refresh only months from there on (incremental); None = full history
+    (caller cleared the table)."""
+    if since_month:
+        session.query(ProductMrr).filter(ProductMrr.month >= since_month).delete(synchronize_session=False)
     by_product: dict[str, list[str]] = {}
     for p in plans:
         product = cm.product_family(p.get("name"))
         if product and _wanted(product):
             by_product.setdefault(product, []).append(p["uuid"])
     end = date.today().isoformat()
+    start = since_month.isoformat() if since_month else PRODUCT_MRR_START
     n = 0
-    for product, uuids in sorted(by_product.items()):
-        series = cm.fetch_product_mrr(uuids, PRODUCT_MRR_START, end)
+    products = sorted(by_product)
+    # One metrics call per product; independent, so fetch concurrently (~2.5 min -> ~20s)
+    with ThreadPoolExecutor(max_workers=cm.WORKERS) as pool:
+        all_series = pool.map(lambda prod: cm.fetch_product_mrr(by_product[prod], start, end), products)
+        fetched = list(zip(products, all_series))
+    for product, series in fetched:
         if not any(v["mrr"] for v in series.values()):
             continue  # never had revenue
         for day, v in series.items():
@@ -292,44 +382,85 @@ def sync_sfdc_opportunities(session) -> int:
     return n
 
 
-def _snapshot(run_id: int) -> None:
-    """ChartMogul + SFDC in one transaction: all or nothing, so the dashboard keeps
-    serving the previous snapshot if any step fails."""
+def _aware(dt):
+    if dt is None:
+        return None
+    return dt.replace(tzinfo=timezone.utc) if dt.tzinfo is None else dt
+
+
+def _cm_mode(session) -> tuple[str, datetime | None, str]:
+    """("full" | "incremental", since, why)."""
+    if os.environ.get("SYNC_FULL", "").strip().lower() in ("1", "true", "yes"):
+        return "full", None, "SYNC_FULL is set"
+    if datetime.now(timezone.utc).weekday() == FULL_WEEKDAY:
+        return "full", None, "weekly full refresh"
+    if session.query(Customer.cm_uuid).first() is None:
+        return "full", None, "no ChartMogul data yet"
+    last = (session.query(SyncRun).filter(SyncRun.cm_completed_at.isnot(None))
+            .order_by(desc(SyncRun.id)).first()
+            # runs from before stages existed: a successful run refreshed ChartMogul fully
+            or session.query(SyncRun).filter(SyncRun.status == "success")
+            .order_by(desc(SyncRun.id)).first())
+    if not last or not last.started_at:
+        return "full", None, "no previous ChartMogul refresh"
+    return "incremental", _aware(last.started_at), ""
+
+
+def _cm_stage(run_id: int) -> None:
+    """Stage A: ChartMogul customers, subscriptions, activities, product MRR."""
     with session_scope() as session:
-        _clear(session)
+        mode, since, why = _cm_mode(session)
         plans = list(cm.iter_plans())
         log.info("Listed %d ChartMogul plans", len(plans))
-        n_cust, n_sub, _ = sync_chartmogul(session, plans)
-        sync_product_mrr(session, plans)
+        if mode == "full":
+            log.info("ChartMogul: full refresh (%s)", why)
+            _clear_chartmogul(session)
+            n_cust, n_sub, _ = sync_chartmogul(session, plans)
+            sync_product_mrr(session, plans)
+        else:
+            n_cust, n_sub, _ = sync_chartmogul_incremental(session, plans, since)
+            sync_product_mrr(session, plans, since_month=_months_ago(PRODUCT_MRR_RECENT_MONTHS))
+        run = session.get(SyncRun, run_id)
+        run.cm_mode = mode
+        run.cm_completed_at = datetime.now(timezone.utc)
+        run.customers_synced, run.subscriptions_synced = n_cust, n_sub
+
+
+def _sfdc_stage(run_id: int) -> None:
+    """Stage B: Salesforce accounts, matching, contacts + contracts, opportunities. All or
+    nothing, so the dashboard keeps the previous Salesforce data if anything fails."""
+    with session_scope() as session:
+        _clear_sfdc(session)
         n_acct = sync_sfdc_accounts(session)
         n_match, n_unmatch = match(session)
         session.flush()
         n_contact, n_contract = sync_sfdc_details(session)
         n_opp = sync_sfdc_opportunities(session)
         run = session.get(SyncRun, run_id)
-        run.status = "success"
-        run.finished_at = datetime.now(timezone.utc)
         run.accounts_synced, run.contacts_synced = n_acct, n_contact
         run.contracts_synced, run.opportunities_synced = n_contract, n_opp
-        run.customers_synced, run.subscriptions_synced = n_cust, n_sub
         run.matched, run.unmatched = n_match, n_unmatch
 
 
-def _snapshot_with_retry(run_id: int) -> None:
-    """ChartMogul's API has timed out for 20+ minutes at a stretch (every night at
-    09:00 UTC in early Nov 2026, fine an hour later). Retry the whole snapshot after a
-    wait, only for those transient ChartMogul errors; anything else fails right away."""
-    for attempt in range(1, SNAPSHOT_ATTEMPTS + 1):
-        try:
-            _snapshot(run_id)
-            return
-        except cm.ChartMogulTransientError as exc:
-            if attempt == SNAPSHOT_ATTEMPTS:
-                raise
-            log.warning("ChartMogul unavailable (%s); retrying the snapshot in %d min "
-                        "(attempt %d of %d)", exc, SNAPSHOT_RETRY_WAIT_S // 60,
-                        attempt + 1, SNAPSHOT_ATTEMPTS)
-            time.sleep(SNAPSHOT_RETRY_WAIT_S)
+def _rematch(run_id: int) -> None:
+    """After a late ChartMogul refresh: link (new) customers to the accounts we have."""
+    with session_scope() as session:
+        n_match, n_unmatch = match(session)
+        run = session.get(SyncRun, run_id)
+        run.matched, run.unmatched = n_match, n_unmatch
+
+
+def _run_stage(name: str, fn, run_id: int, errors: dict) -> bool:
+    t0 = time.monotonic()
+    try:
+        fn(run_id)
+    except Exception as exc:
+        log.exception("%s stage failed", name)
+        errors[name] = exc
+        return False
+    errors.pop(name, None)
+    log.info("%s stage done in %.0fs", name, time.monotonic() - t0)
+    return True
 
 
 def main():
@@ -346,28 +477,43 @@ def main():
         session.flush()
         run_id = run.id
 
-    failed = False
-    try:
-        _snapshot_with_retry(run_id)
-        log.info("Sync complete")
-    except Exception as exc:
-        failed = True
-        log.exception("Sync failed")
-        with session_scope() as session:
-            run = session.get(SyncRun, run_id)
-            run.status = "failed"
-            run.finished_at = datetime.now(timezone.utc)
-            run.error = str(exc)[:4000]
+    errors: dict[str, Exception] = {}
+    cm_ok = _run_stage("ChartMogul", _cm_stage, run_id, errors)
+    sfdc_ok = _run_stage("Salesforce", _sfdc_stage, run_id, errors)
 
-    # Healthie product usage (Metabase). Independent of ChartMogul/SFDC, so it runs even
-    # when the snapshot failed. Own transaction; on failure the previous data stays.
+    # Healthie product usage (Metabase). Independent of the other stages; its own
+    # transaction; on failure the previous data stays.
     try:
         metabase.sync_org_usage()
     except Exception:
         log.exception("Metabase org usage sync failed; keeping previous data")
 
-    if failed:
-        sys.exit(1)  # after Metabase, so the cron run still shows as failed
+    # ChartMogul has gone down for 20+ minutes at a stretch: wait and retry it, only for
+    # transient errors (a bug won't fix itself), after the other stages are already done.
+    attempt = 1
+    while not cm_ok and isinstance(errors.get("ChartMogul"), cm.ChartMogulTransientError) \
+            and attempt < SNAPSHOT_ATTEMPTS:
+        attempt += 1
+        log.warning("ChartMogul unavailable; retrying its stage in %d min (attempt %d of %d)",
+                    SNAPSHOT_RETRY_WAIT_S // 60, attempt, SNAPSHOT_ATTEMPTS)
+        time.sleep(SNAPSHOT_RETRY_WAIT_S)
+        cm_ok = _run_stage("ChartMogul", _cm_stage, run_id, errors)
+        if cm_ok and sfdc_ok:
+            _run_stage("Re-match", _rematch, run_id, errors)
+
+    with session_scope() as session:
+        run = session.get(SyncRun, run_id)
+        run.finished_at = datetime.now(timezone.utc)
+        if not errors:
+            run.status = "success"
+        else:
+            run.status = "failed" if not (cm_ok or sfdc_ok) else "partial"
+            run.error = "; ".join(f"{k}: {v}" for k, v in errors.items())[:4000]
+    if errors:
+        log.error("Sync %s: %s", "failed" if not (cm_ok or sfdc_ok) else "partly failed",
+                  ", ".join(errors))
+        sys.exit(1)  # the cron run still shows as failed
+    log.info("Sync complete")
 
 
 if __name__ == "__main__":

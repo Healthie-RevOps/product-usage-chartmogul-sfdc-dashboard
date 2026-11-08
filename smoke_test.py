@@ -8,7 +8,7 @@ import io
 import json
 import os
 import tempfile
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 os.environ["DATABASE_URL"] = "sqlite:///" + os.path.join(
     tempfile.mkdtemp(), "smoke.db"
@@ -613,32 +613,38 @@ check("account: enterprise fields + CSM relationship",
 check("account: add-on flags are booleans; hidden flag -> False",
       (acct["has_ai_scribe"], acct["has_erx"], acct["has_zoom"]), (True, False, False))
 
-print("\nsync orchestration (ChartMogul down):")
+print("\nsync orchestration (stages, ChartMogul down):")
 from sync import run_sync as rs  # noqa: E402
 from sync import chartmogul as cm_mod  # noqa: E402
 
 
-def run_main(snapshot_outcomes):
-    """Run rs.main() with fake steps. snapshot_outcomes: exception or None per attempt."""
-    calls = {"snapshot": 0, "metabase": 0, "slept": [], "exit": None}
-    outcomes = list(snapshot_outcomes)
+def run_main(cm_outcomes, sfdc_outcomes=(None,)):
+    """Run rs.main() with fake stages. *_outcomes: exception or None per attempt."""
+    calls = {"order": [], "slept": [], "exit": None}
+    cm_left, sfdc_left = list(cm_outcomes), list(sfdc_outcomes)
 
-    def fake_snapshot(run_id):
-        calls["snapshot"] += 1
-        exc = outcomes.pop(0)
-        if exc:
-            raise exc
+    def stage(name, left):
+        def fn(run_id):
+            calls["order"].append(name)
+            exc = left.pop(0)
+            if exc:
+                raise exc
+        return fn
 
-    saved = (rs._snapshot, rs.metabase.sync_org_usage, rs.time.sleep)
-    rs._snapshot = fake_snapshot
-    rs.metabase.sync_org_usage = lambda: calls.__setitem__("metabase", calls["metabase"] + 1)
-    rs.time.sleep = calls["slept"].append
+    saved = (rs._cm_stage, rs._sfdc_stage, rs._rematch, rs.metabase.sync_org_usage, rs.time.sleep)
+    rs._cm_stage, rs._sfdc_stage = stage("cm", cm_left), stage("sfdc", sfdc_left)
+    rs._rematch = lambda run_id: calls["order"].append("rematch")
+    rs.metabase.sync_org_usage = lambda: calls["order"].append("metabase")
+    rs.time.sleep = lambda secs: (calls["slept"].append(secs), calls["order"].append("wait"))
     try:
         rs.main()
     except SystemExit as e:
         calls["exit"] = e.code
     finally:
-        rs._snapshot, rs.metabase.sync_org_usage, rs.time.sleep = saved
+        rs._cm_stage, rs._sfdc_stage, rs._rematch, rs.metabase.sync_org_usage, rs.time.sleep = saved
+    with session_scope() as s:
+        latest = s.query(SyncRun).order_by(SyncRun.id.desc()).first()
+        calls["status"], calls["error"] = latest.status, latest.error or ""
     return calls
 
 
@@ -649,15 +655,91 @@ c = run_main([transient, None])
 with session_scope() as s:
     killed = s.query(SyncRun).filter(SyncRun.started_at == datetime(2026, 11, 8, 19, 5)).one()
     check("next sync marks a killed run as interrupted", (killed.status, killed.error[:11]), ("failed", "Interrupted"))
-check("CM down once -> waits, retries, succeeds",
-      (c["snapshot"], c["slept"], c["metabase"], c["exit"]),
-      (2, [rs.SNAPSHOT_RETRY_WAIT_S], 1, None))
+check("CM down once: Salesforce + Metabase run first, then wait, retry CM, re-match",
+      (c["order"], c["status"], c["exit"]),
+      (["cm", "sfdc", "metabase", "wait", "cm", "rematch"], "success", None))
 c = run_main([transient, transient])
-check("CM down twice -> Metabase still runs, exit 1",
-      (c["snapshot"], c["metabase"], c["exit"]), (2, 1, 1))
+check("CM down twice: partial (Salesforce data still committed), exit 1",
+      (c["order"].count("cm"), c["order"].count("sfdc"), c["status"], c["exit"], c["error"][:10]),
+      (2, 1, "partial", 1, "ChartMogul"))
 c = run_main([ValueError("bug")])
-check("non-ChartMogul error -> no retry, Metabase still runs, exit 1",
-      (c["snapshot"], c["slept"], c["metabase"], c["exit"]), (1, [], 1, 1))
+check("CM bug: no retry, Salesforce still runs, partial",
+      (c["order"], c["status"], c["exit"]), (["cm", "sfdc", "metabase"], "partial", 1))
+c = run_main([None], [RuntimeError("SFDC down")])
+check("Salesforce fails, CM ok: partial, no wait", (c["order"], c["status"], c["exit"]),
+      (["cm", "sfdc", "metabase"], "partial", 1))
+c = run_main([ValueError("a")], [RuntimeError("b")])
+check("both fail: failed", (c["status"], c["exit"]), ("failed", 1))
+check("a partial run still refreshes the dashboard cache",
+      data_mod.REFRESHED, ("success", "partial"))
+
+print("\nincremental ChartMogul refresh:")
+os.environ["SYNC_FULL"] = "1"
+s_ = main.SessionLocal()
+check("SYNC_FULL=1 forces a full refresh", rs._cm_mode(s_)[0], "full")
+os.environ.pop("SYNC_FULL")
+saved_wd = rs.FULL_WEEKDAY
+rs.FULL_WEEKDAY = datetime.now(timezone.utc).weekday()
+check("weekly full refresh on SYNC_FULL_WEEKDAY", rs._cm_mode(s_)[:3:2], ("full", "weekly full refresh"))
+rs.FULL_WEEKDAY = -1
+with session_scope() as s:
+    s.add(SyncRun(status="partial", started_at=datetime(2026, 11, 7, 12, 0),
+                  cm_mode="incremental", cm_completed_at=datetime(2026, 11, 7, 12, 2)))
+mode, since, _ = rs._cm_mode(s_)
+check("otherwise incremental, since the last ChartMogul refresh",
+      (mode, since.isoformat()), ("incremental", "2026-11-07T12:00:00+00:00"))
+s_.close()
+rs.FULL_WEEKDAY = saved_wd
+
+with session_scope() as s:
+    for u, name in (("cus_inc_a", "Inc A old"), ("cus_inc_b", "Inc B")):
+        s.add(Customer(cm_uuid=u, name=name, status="Active", mrr_cents=100))
+        s.add(Subscription(cm_uuid=f"sub_{u}", customer_uuid=u, plan_name="Old Plan", product="Old Plan",
+                           is_current=True, mrr_cents=100))
+        s.add(Activity(customer_uuid=u, date=datetime(2025, 1, 1), type="new_biz", mrr_cents=100))
+acme_subs_before = None
+with session_scope() as s:
+    acme_subs_before = s.query(Subscription).filter(Subscription.customer_uuid == ACME).count()
+fake_raw = {"cus_inc_a": {"uuid": "cus_inc_a", "name": "Inc A new", "status": "Active", "mrr": 500},
+            "cus_inc_b": {"uuid": "cus_inc_b", "name": "Inc B", "status": "Lead"},
+            "cus_inc_new": {"uuid": "cus_inc_new", "name": "Brand New", "status": "Active", "mrr": 900},
+            "cus_inc_gone": None}
+fake_details = {"cus_inc_a": ([{"uuid": "sub_a2", "plan": "AI Scribe", "status": "active", "mrr": 500}],
+                              [{"date": "2026-11-07", "type": "expansion", "activity-mrr": 500}]),
+                "cus_inc_new": ([{"uuid": "sub_new", "plan": "Group Plan - X", "status": "active", "mrr": 900}], [])}
+asked = {}
+saved_cm = (cm_mod.iter_activities_since, cm_mod.fetch_customer, cm_mod.map_customer_details)
+cm_mod.iter_activities_since = lambda start: (asked.__setitem__("start", start) or
+                                              [{"customer-uuid": u} for u in fake_raw] + [{"customer-uuid": "cus_inc_a"}])
+cm_mod.fetch_customer = lambda u: fake_raw[u]
+cm_mod.map_customer_details = lambda uuids: ((u, *fake_details[u]) for u in uuids)
+try:
+    with session_scope() as s:
+        n = rs.sync_chartmogul_incremental(s, [], datetime(2026, 11, 7, 12, 0, tzinfo=timezone.utc))
+finally:
+    cm_mod.iter_activities_since, cm_mod.fetch_customer, cm_mod.map_customer_details = saved_cm
+check("reads activity since the last refresh minus the overlap", asked["start"], "2026-11-05T12:00:00Z")
+check("refreshed customers / subscriptions / activities", n, (2, 2, 1))
+with session_scope() as s:
+    a_ = s.get(Customer, "cus_inc_a")
+    check("changed customer replaced (name, subscriptions)",
+          (a_.name, [x.plan_name for x in s.query(Subscription).filter(Subscription.customer_uuid == "cus_inc_a")]),
+          ("Inc A new", ["AI Scribe"]))
+    check("customer no longer Active/Cancelled, or deleted, is removed",
+          (s.get(Customer, "cus_inc_b"), s.query(Subscription).filter(Subscription.customer_uuid == "cus_inc_b").count(),
+           s.get(Customer, "cus_inc_gone")), (None, 0, None))
+    check("new customer added", s.get(Customer, "cus_inc_new").name, "Brand New")
+    check("unchanged customers untouched",
+          s.query(Subscription).filter(Subscription.customer_uuid == ACME).count(), acme_subs_before)
+s_ = main.SessionLocal()
+try:
+    rs._clear_sfdc(s_)
+    check("Salesforce stage clears accounts but keeps customers (unlinked)",
+          (s_.query(SfdcAccount).count(), s_.query(Customer).filter(Customer.sfdc_account_id.isnot(None)).count(),
+           s_.query(Customer).count() > 0), (0, 0, True))
+finally:
+    s_.rollback()
+    s_.close()
 
 print(f"\n{'ALL CHECKS PASSED' if not failures else 'FAILURES: ' + ', '.join(failures)}")
 raise SystemExit(1 if failures else 0)

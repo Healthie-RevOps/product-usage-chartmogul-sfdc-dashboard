@@ -76,12 +76,15 @@ _snap: Snapshot | None = None
 def _latest_success_id(session) -> tuple | None:
     """Cache key: latest successful nightly sync + latest Healthie org usage refresh
     (that one can be refreshed on its own: python -m sync.metabase)."""
-    run = session.query(func.max(SyncRun.id)).filter(SyncRun.status == "success").scalar()
+    run = session.query(func.max(SyncRun.id)).filter(SyncRun.status.in_(REFRESHED)).scalar()
     if run is None:
         return None
     return run, session.query(func.max(HealthieOrgUsage.synced_at)).scalar()
 
 
+# Run statuses that refreshed data: "partial" = one stage (e.g. ChartMogul) failed but the
+# others committed, so the dashboard should still pick up what changed.
+REFRESHED = ("success", "partial")
 SYNC_SCHEDULE_UTC = os.environ.get("SYNC_SCHEDULE_UTC", "12:00")   # display only; set in Railway
 RUNNING_STALE_HOURS = 3
 
@@ -94,7 +97,7 @@ def _utc(dt):
 
 def sync_status(session) -> dict:
     """What the top bar and empty states say about data freshness."""
-    ok = (session.query(SyncRun).filter(SyncRun.status == "success")
+    ok = (session.query(SyncRun).filter(SyncRun.status.in_(REFRESHED))
           .order_by(desc(SyncRun.id)).first())
     latest = session.query(SyncRun).order_by(desc(SyncRun.id)).first()
     now = datetime.now(timezone.utc)
@@ -103,8 +106,8 @@ def sync_status(session) -> dict:
         started = _utc(latest.started_at)
         if started and (now - started).total_seconds() < RUNNING_STALE_HOURS * 3600:
             running = started
-    last_failed = bool(latest and latest.id != (ok.id if ok else None)
-                       and latest.status != "running")
+    last_failed = bool(latest and latest.status == "failed")
+    last_partial = bool(latest and latest.status == "partial")
     hh, _, mm = SYNC_SCHEDULE_UTC.partition(":")
     nxt = now.replace(hour=int(hh), minute=int(mm or 0), second=0, microsecond=0)
     if nxt <= now:
@@ -118,8 +121,8 @@ def sync_status(session) -> dict:
     return {"data_as_of": iso(data_as_of), "data_as_of_label": label(data_as_of),
             "running_since": iso(running), "running_since_label": label(running),
             "next_run_label": label(nxt),
-            "last_failed": last_failed,
-            "last_error": (latest.error or "")[:200] if last_failed and latest else None,
+            "last_failed": last_failed, "last_partial": last_partial,
+            "last_error": (latest.error or "")[:200] if (last_failed or last_partial) and latest else None,
             "next_run": iso(nxt), "schedule_utc": SYNC_SCHEDULE_UTC}
 
 

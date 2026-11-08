@@ -278,6 +278,10 @@ class SyncRun(Base):
     contacts_synced = Column(Integer, default=0)
     contracts_synced = Column(Integer, default=0)
     opportunities_synced = Column(Integer, default=0)
+    # ChartMogul stage: "full" or "incremental"; completed_at = its transaction committed.
+    # The next incremental refresh reads ChartMogul activity since this run started.
+    cm_mode = Column(String)
+    cm_completed_at = Column(DateTime)
     matched = Column(Integer, default=0)
     unmatched = Column(Integer, default=0)
     error = Column(Text)

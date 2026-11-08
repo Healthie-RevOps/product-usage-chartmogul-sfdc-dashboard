@@ -150,6 +150,24 @@ Design decisions (deliberate — don't undo casually):
 6. Web service → Settings → Networking → generate the public domain. Consider
    restricting access (Railway has no built-in auth — see Auth below).
 
+### What the sync does, and how long it takes
+
+Three stages, each committed on its own, so a slow or failing ChartMogul never holds back
+the Salesforce data (Enterprise, Win / loss, Data quality) and vice versa:
+
+| Stage | Nightly (incremental) | Weekly full refresh |
+|---|---|---|
+| ChartMogul: customers, subscriptions, activities, product MRR | ~35s: only customers in ChartMogul's activity feed since the last refresh (~30-50 a day of ~15k), product MRR for the last 3 months | ~40 min: lists all ~15k customers and fetches each one's history |
+| Salesforce: accounts, contacts, contracts, opportunities | a few minutes | same |
+| Metabase: provider / client counts | ~40s | same |
+
+- Full refresh on Sundays (`SYNC_FULL_WEEKDAY`), with `SYNC_FULL=1`, or when there's no
+  previous ChartMogul refresh. It catches customer changes with no billing activity (e.g. a
+  new Healthie Org ID); everything that moves MRR is picked up the next night.
+- If ChartMogul fails transiently, Salesforce and Metabase still run, then ChartMogul is
+  retried once after 30 min. A run where one stage failed is `partial`: the dashboard shows
+  what did refresh and the top bar says "last sync partly failed".
+
 ### Deploys: automatic from `main`, after CI passes
 
 Until 2026-11-08 both services ran manual `railway up` uploads, so production silently
