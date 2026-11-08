@@ -318,7 +318,7 @@ def sync_sfdc_accounts(session) -> int:
 
 
 def _add_account(session, a: dict) -> None:
-    for k in ("renewal_date", "kickoff_date"):
+    for k in ("renewal_date", "kickoff_date", "reference_date"):
         a[k] = _d(a.get(k))
     session.add(SfdcAccount(**a))
 

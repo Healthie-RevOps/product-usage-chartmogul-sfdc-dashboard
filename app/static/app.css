@@ -369,7 +369,7 @@ table.data th { padding: 9px 10px; }
 .home-hero { margin: 8px 0 24px; }
 .home-hero h1 { font-size: 30px; margin: 0 0 6px; letter-spacing: -.015em; }
 .home-hero p { color: var(--muted); font-size: 15.5px; margin: 0; max-width: 760px; }
-.tasks { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 18px; margin-bottom: 26px; }
+.tasks { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin-bottom: 26px; }
 .task { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 22px 22px 20px;
   display: flex; flex-direction: column; gap: 10px; color: var(--navy); transition: border-color .15s, box-shadow .15s; }
 .task:hover { border-color: var(--purple); box-shadow: 0 8px 24px rgba(85,43,216,.10); text-decoration: none; }
@@ -385,3 +385,33 @@ table.data th { padding: 9px 10px; }
 .flow .step li { margin: 6px 0; color: var(--slate); }
 .flow .step li b { color: var(--navy); }
 table.breakdown td.reasons { max-width: 340px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ---- add-on column header filters ---- */
+table.matrix th.addon { vertical-align: top; }
+table.matrix th .th-label { display: block; margin-bottom: 4px; }
+select.th-filter { font-size: 11.5px; padding: 3px 4px; border-radius: 6px; max-width: 120px; text-transform: none;
+  letter-spacing: 0; font-weight: 500; color: var(--slate); cursor: pointer; }
+select.th-filter.active { border-color: var(--purple); background: var(--purple-tint); color: var(--purple-dark); font-weight: 700; }
+
+/* ---- accounts ---- */
+.missing { color: var(--amber); font-size: 11.5px; font-weight: 600; background: var(--amber-tint);
+  border-radius: 999px; padding: 1px 7px; }
+table.breakdown tr.group-row td { background: var(--bg); font-size: 11.5px; font-weight: 700; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .04em; padding: 6px 10px; }
+.accounts-table td.cell { white-space: nowrap; }
+.edit-cell { display: inline-flex; flex-direction: column; gap: 3px; }
+.edit-cell select, .edit-cell input[type=date] { font-size: 12.5px; padding: 4px 6px; border: 1px dashed var(--axis);
+  border-radius: 6px; background: #fff; }
+.edit-cell select:hover, .edit-cell input:hover { border-color: var(--purple); border-style: solid; }
+td.is-missing .edit-cell select, td.is-missing .edit-cell input { background: var(--amber-tint); }
+.edit-status { font-size: 11px; max-width: 220px; white-space: normal; }
+.edit-status.saving { color: var(--muted); }
+.edit-status.ok { color: #0B6B4F; font-weight: 700; }
+.edit-status.warn { color: var(--amber); }
+.edit-status.err { color: var(--danger); }
+/* accounts table: pin the account column (no checkbox column here) */
+table.accounts-table th.addon { white-space: normal; min-width: 92px; max-width: 120px; line-height: 1.25; vertical-align: bottom; }
+table.accounts-table th:first-child, table.accounts-table td.acct { position: sticky; left: 0; z-index: 2; background: #fff;
+  box-shadow: 1px 0 0 var(--line); min-width: 200px; }
+table.accounts-table thead th:first-child { z-index: 3; }
+table.accounts-table tr:hover td.acct { background: #FAFAFD; }

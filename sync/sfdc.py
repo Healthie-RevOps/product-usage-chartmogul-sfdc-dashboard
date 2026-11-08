@@ -128,6 +128,49 @@ def _get(url: str, params: dict | None = None) -> dict:
     raise SfdcError(f"Gave up on {url} after retries")
 
 
+def get_account(account_id: str, api_names: list[str]) -> dict:
+    """Current values of a few fields on one Account, straight from Salesforce."""
+    if not re.fullmatch(r"[a-zA-Z0-9]{15,18}", account_id or ""):
+        raise SfdcError("Bad account id")
+    base = _session()["instance_url"]
+    return _get(f"{base}/services/data/{API_VERSION}/sobjects/Account/{account_id}",
+                {"fields": ",".join(api_names)})
+
+
+def update_account(account_id: str, values: dict) -> None:
+    """PATCH allowlisted fields on one Account. values: {api_name: value or None}.
+    The only write the dashboard makes to Salesforce."""
+    if not re.fullmatch(r"[a-zA-Z0-9]{15,18}", account_id or ""):
+        raise SfdcError("Bad account id")
+    bad = set(values) - set(ACCOUNT_EDITABLE_FIELDS.values())
+    if bad:
+        raise SfdcError(f"Not an editable field: {sorted(bad)}")
+    url = f"{_session()['instance_url']}/services/data/{API_VERSION}/sobjects/Account/{account_id}"
+    reauthed = False
+    for attempt in range(3):
+        headers = {"Authorization": f"Bearer {_session()['access_token']}",
+                   "Content-Type": "application/json"}
+        try:
+            # Setting fields to values is idempotent, so retrying a timed-out PATCH is safe
+            resp = requests.patch(url, json=values, headers=headers, timeout=60)
+        except (requests.ConnectionError, requests.Timeout) as exc:
+            if attempt == 2:
+                raise SfdcError(f"Salesforce unreachable: {exc}") from exc
+            time.sleep(2 ** attempt)
+            continue
+        if resp.status_code == 401 and not reauthed:
+            _token_cache.clear()
+            reauthed = True
+            continue
+        if resp.status_code in (200, 204):
+            return
+        if resp.status_code >= 500 and attempt < 2:
+            time.sleep(2 ** attempt)
+            continue
+        raise SfdcError(f"{resp.status_code}: {resp.text[:400]}")
+    raise SfdcError("Salesforce update failed after retries")
+
+
 def _query_all(soql: str):
     """Run a SOQL query and follow nextRecordsUrl pagination."""
     base = _session()["instance_url"]
@@ -165,6 +208,24 @@ ACCOUNT_ENTERPRISE_FIELDS = {
     "enterprise_category": "Enterprise_Category__c",   # multi-select, ";"-separated
     "current_ehr": "Current_EMR_EHR__c",
     "kickoff_date": "X1_Kickoff_Discovery_Date__c",
+    # Reference / marketing fields (verified 2026-11-08 via describe)
+    "referenceable": "Referenceable__c",                 # picklist Yes / No
+    "reference_date": "Reference_Date__c",
+    "contracted_case_study": "Contracted_to_Case_Study__c",
+    "case_study_complete": "Case_Study_Complete__c",
+    "case_study_available": "Case_Study_Available__c",   # checkbox, calculated (read-only)
+    "contracted_logo": "Contracted_to_Use_Logo__c",
+    "logo_use_permitted": "Logo_Use_Permitted__c",       # read-only for the app's login
+}
+
+# The only Account fields the dashboard may write (column -> API name). Anything else is
+# rejected before a request is made. See app/accounts.py for labels / allowed values.
+ACCOUNT_EDITABLE_FIELDS = {
+    "referenceable": "Referenceable__c",
+    "reference_date": "Reference_Date__c",
+    "contracted_case_study": "Contracted_to_Case_Study__c",
+    "case_study_complete": "Case_Study_Complete__c",
+    "contracted_logo": "Contracted_to_Use_Logo__c",
 }
 
 # Add-on checkboxes synced into SFDC from Stripe (same report). Column -> field.
