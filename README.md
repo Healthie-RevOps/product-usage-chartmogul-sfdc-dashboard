@@ -204,6 +204,14 @@ ALLOW_INSECURE_NO_AUTH=1 uvicorn app.main:app --reload   # skip Google sign-in l
   - CSVs: accounts with every add-on state, and **providers & admins** at those accounts (active
     Healthie users with a Standard seat or owner/admin role, with an email, not opted out).
 
+- `/deals` (Win / loss): every synced opportunity with win rate, Year 1 ACV, and loss reasons
+  **by competitor**, plus a loss-reason breakdown and a deals table + CSV. Defaults to new-sales
+  deals closing this year (the SFDC "Competitor Field Opportunities" report's scope). Logic in
+  `app/deals.py`: one competitor per deal (`Competitor__c`, else `Competitor_Free_Text__c`, else
+  the first name in `Competition__c`), placeholders like "Other / Unknown" count as not recorded,
+  spelling variants merge; loss reasons drop the `R:`/`NR:` prefix into a separate
+  regrettable / non-regrettable field.
+
 ## JSON API (for other tooling / Claude skills)
 
 - `GET /api/products` — plan-level rollup: customers + MRR per product

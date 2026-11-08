@@ -18,7 +18,7 @@ from sqlalchemy import desc
 from sqlalchemy.orm import selectinload
 from starlette.middleware.sessions import SessionMiddleware
 
-from app import auth, data, enterprise
+from app import auth, data, deals, enterprise
 from app.db import (
     Customer, HealthieOrgUsage, SfdcAccount, SfdcContract, SyncRun, init_db, SessionLocal,
 )
@@ -185,6 +185,15 @@ def enterprise_page(request: Request):
         return _page(request, "enterprise.html", {
             "addons": [{"key": a["key"], "label": a["label"]} for a in enterprise.ADDONS],
         }, session)
+    finally:
+        session.close()
+
+
+@app.get("/deals", response_class=HTMLResponse)
+def deals_page(request: Request):
+    session = SessionLocal()
+    try:
+        return _page(request, "deals.html", {}, session)
     finally:
         session.close()
 
@@ -517,6 +526,76 @@ def export_enterprise_contacts(spec: str = Form("{}")):
              + [x["account"]["addons"][a["key"]]["state"] for a in addons]
              + [x["contact"].id, x["contact"].account_id] for x in items),
             f"enterprise_contacts_{date.today().isoformat()}.csv")
+    finally:
+        session.close()
+
+
+# ---------------------------------------------------------------- win/loss
+
+class DealSpec(BaseModel):
+    record_type: str = ""
+    date_from: str = ""
+    date_to: str = ""
+    outcome: str = ""            # "" | won | lost | open | closed
+    owner: str = ""
+    competitor: str = ""
+    reason: str = ""
+    incumbent: str = ""
+    q: str = ""
+
+
+def _deal_rows(session, s: DealSpec) -> tuple[list[dict], list[dict]]:
+    base = deals.base_rows(session, data.snapshot(session))
+    rows = deals.filter_rows(base, s.record_type, s.date_from, s.date_to, s.outcome, s.owner,
+                             s.competitor, s.reason, s.incumbent, s.q)
+    return base, rows
+
+
+DEAL_ROW_LIMIT = 1500
+
+
+@app.get("/api/deals")
+def api_deals(record_type: str = "", date_from: str = "", date_to: str = "", outcome: str = "",
+              owner: str = "", competitor: str = "", reason: str = "", incumbent: str = "",
+              q: str = ""):
+    session = SessionLocal()
+    try:
+        s = DealSpec(record_type=record_type, date_from=date_from, date_to=date_to,
+                     outcome=outcome, owner=owner, competitor=competitor, reason=reason,
+                     incumbent=incumbent, q=q)
+        base, rows = _deal_rows(session, s)
+        # breakdowns ignore their own filter, so clicking a competitor/reason keeps the rest visible
+        comp_rows = rows if not s.competitor else _deal_rows(session, s.model_copy(update={"competitor": ""}))[1]
+        reason_rows = rows if not s.reason else _deal_rows(session, s.model_copy(update={"reason": ""}))[1]
+        return JSONResponse({
+            "totals": deals.totals(rows), "competitors": deals.by_competitor(comp_rows),
+            "reasons": deals.by_reason(reason_rows), "facets": deals.facets(base),
+            "rows": rows[:DEAL_ROW_LIMIT], "total_rows": len(rows), "limit": DEAL_ROW_LIMIT,
+        })
+    finally:
+        session.close()
+
+
+@app.post("/export/deals.csv")
+def export_deals(spec: str = Form("{}")):
+    try:
+        s = DealSpec.model_validate_json(spec or "{}")
+    except ValueError as exc:
+        raise HTTPException(400, f"Bad selection: {exc}")
+    session = SessionLocal()
+    try:
+        _, rows = _deal_rows(session, s)
+        return _csv_response(
+            ["deal", "account", "record_type", "type", "stage", "outcome", "close_date",
+             "year1_acv_usd", "amount_usd", "competitor", "secondary_competitor", "incumbent",
+             "loss_reason", "regrettable", "loss_reason_detail", "why_won", "current_situation",
+             "owner", "sfdc_opportunity_id", "sfdc_url"],
+            ([r["name"], r["account"], r["record_type"], r["type"], r["stage"], r["outcome"],
+              r["close_date"], r["year1_acv"], r["amount"], r["competitor"], r["secondary"],
+              r["incumbent"], r["reason"], r["regrettable"], r["reason_detail"], r["why_won"],
+              r["situation"], r["owner"], r["id"],
+              f"{LIGHTNING_BASE}/lightning/r/Opportunity/{r['id']}/view"] for r in rows),
+            f"deals_{date.today().isoformat()}.csv")
     finally:
         session.close()
 

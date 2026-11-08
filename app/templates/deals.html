@@ -1,0 +1,101 @@
+{% extends "base.html" %}
+{% block title %}Win / loss{% endblock %}
+{% block nav_deals %}active{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <h1>Win / loss</h1>
+  <span class="sub">Why we win and lose deals, and against whom. Salesforce opportunities, open or closed since 2024.</span>
+</div>
+
+<div class="filters" role="search">
+  <select id="f-rt" aria-label="Record type"><option value="">All record types</option></select>
+  <select id="f-range" aria-label="Close date">
+    <option value="year">Closing this year</option>
+    <option value="last_year">Closed last year</option>
+    <option value="12m">Last 12 months</option>
+    <option value="90d">Last 90 days</option>
+    <option value="all">Any close date</option>
+    <option value="custom">Custom dates…</option>
+  </select>
+  <span id="custom-dates" hidden>
+    <input type="date" id="f-from" aria-label="Close date from"> – <input type="date" id="f-to" aria-label="Close date to">
+  </span>
+  <div class="seg" role="group" aria-label="Outcome" id="outcome-seg">
+    <button data-o="" aria-pressed="true">All</button>
+    <button data-o="won" aria-pressed="false">Won</button>
+    <button data-o="lost" aria-pressed="false">Lost</button>
+    <button data-o="open" aria-pressed="false">Open</button>
+  </div>
+  <select id="f-owner" aria-label="Owner"><option value="">Any owner</option></select>
+  <select id="f-incumbent" aria-label="Incumbent"><option value="">Any incumbent</option></select>
+  <input type="search" id="f-q" placeholder="Search deals or accounts…" autocomplete="off">
+  <button class="linklike" id="f-clear" hidden>Reset filters</button>
+</div>
+<div class="chips" id="chips" style="margin:-4px 0 14px"></div>
+
+<div class="kpis" id="kpis"></div>
+
+<section class="card" id="comp-card">
+  <div class="card-head">
+    <h2>By competitor</h2>
+    <span class="spacer"></span>
+    <span class="small muted">Primary competitor per deal. Click a row to filter.</span>
+  </div>
+  <div class="table-wrap" style="max-height:520px">
+    <table class="data breakdown">
+      <thead><tr>
+        <th>Competitor</th><th class="num">Won</th><th class="num">Lost</th><th class="num">Open</th>
+        <th style="width:150px">Win rate</th><th class="num">Won ACV</th><th class="num">Lost ACV</th>
+        <th>Top loss reasons</th><th class="num" title="Deals where this was the secondary competitor">As secondary</th>
+      </tr></thead>
+      <tbody id="comp-body"></tbody>
+    </table>
+  </div>
+  <div class="note-line">Win rate = won ÷ (won + lost). ACV = Year 1 ACV, else Amount. “Not recorded” = no competitor, or a placeholder like “Other / Unknown”.</div>
+</section>
+
+<section class="card" id="reason-card">
+  <div class="card-head">
+    <h2>Loss reasons</h2>
+    <span class="spacer"></span>
+    <span class="small muted">Lost deals in view. Click a row to filter.</span>
+  </div>
+  <div class="table-wrap" style="max-height:440px">
+    <table class="data breakdown">
+      <thead><tr>
+        <th>Reason</th><th style="width:200px">Share of losses</th><th class="num">Lost</th>
+        <th class="num" title="Marked R: (regrettable) / NR: (non-regrettable) in Salesforce">Regrettable / not</th>
+        <th class="num">Lost ACV</th><th>Most common competitor</th>
+      </tr></thead>
+      <tbody id="reason-body"></tbody>
+    </table>
+  </div>
+  <div class="note-line">Add-on deals use the add-on loss reason. “NR: Timing” and the older “Timing” count as one reason; the R / NR mark is shown separately.</div>
+</section>
+
+<section class="card" id="deals-card">
+  <div class="card-head">
+    <h2>Deals <span class="count" id="deal-count">0</span></h2>
+    <span class="spacer"></span>
+    <button class="btn small primary" id="export-deals">↓ Deals CSV</button>
+  </div>
+  <div class="table-wrap">
+    <table class="data" id="deals-table">
+      <thead><tr>
+        <th class="sortable" data-sort="name">Deal</th><th>Record type</th>
+        <th class="sortable" data-sort="outcome">Outcome</th><th class="sortable" data-sort="close_date">Close</th>
+        <th class="sortable num" data-sort="value">Year 1 ACV</th><th class="sortable" data-sort="competitor">Competitor</th>
+        <th>Incumbent</th><th>Reason</th><th class="sortable" data-sort="owner">Owner</th>
+      </tr></thead>
+      <tbody id="deals-body"></tbody>
+    </table>
+  </div>
+  <div class="note-line" id="deals-note"></div>
+</section>
+
+<form id="export-form" method="post" hidden><input type="hidden" name="spec" id="export-spec"></form>
+<script>window.LIGHTNING_BASE = {{ lightning_base|tojson }};</script>
+{% endblock %}
+
+{% block scripts %}<script src="/static/deals.js?v=1"></script>{% endblock %}

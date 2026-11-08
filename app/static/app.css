@@ -259,3 +259,13 @@ table.matrix tr:hover td.check, table.matrix tr:hover td.acct { background: #FAF
 table.matrix tr.selected td.check, table.matrix tr.selected td.acct { background: var(--purple-tint); }
 table.matrix th.check, table.matrix td.check { width: 30px; min-width: 30px; max-width: 30px;
   padding: 8px 0 8px 8px; }
+
+/* ---- win / loss ---- */
+table.breakdown td { vertical-align: middle; }
+table.breakdown td.strong { font-weight: 700; }
+table.breakdown tr.clickable { cursor: pointer; }
+table.breakdown tr.clickable:focus-visible { outline: 2px solid var(--purple); outline-offset: -2px; }
+.meter-row { display: flex; align-items: center; gap: 8px; }
+.meter { flex: 1; height: 8px; border-radius: 999px; background: var(--purple-tint); overflow: hidden; min-width: 60px; }
+.meter span { display: block; height: 100%; background: var(--purple); border-radius: 999px; }
+.meter-val { font-variant-numeric: tabular-nums; font-weight: 600; min-width: 34px; text-align: right; font-size: 12.5px; }
