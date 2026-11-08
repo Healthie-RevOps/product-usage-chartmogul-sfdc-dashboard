@@ -11,14 +11,14 @@
 <div class="tasks" id="tasks">
   <a class="task" href="/enterprise">
     <span class="tagline">Upsell</span>
-    <span class="q">Find Enterprise accounts to pitch an add-on</span>
-    <span class="what">See which accounts have AI Scribe, Bridge, white label and more, who's being pitched, who said no and why, and who was never asked. Then pull the providers and admins to contact.</span>
+    <span class="q">Find accounts to pitch an add-on</span>
+    <span class="what">On any plan (Enterprise by default): see which accounts have AI Scribe, Bridge, white label and more, who's being pitched, who said no and why, and who was never asked. Then pull the providers and admins to contact.</span>
     <span class="stat">{% if stats.enterprise %}<b>{{ stats.enterprise|num }}</b>paying Enterprise accounts · {{ stats.never_pitched|num }} add-ons never pitched{% else %}<b>—</b>loads after the next sync{% endif %}</span>
-    <span class="go">Open Enterprise add-ons →</span>
+    <span class="go">Open Add-ons →</span>
   </a>
   <a class="task" href="/accounts">
     <span class="tagline">Account data</span>
-    <span class="q">Check and fill in Enterprise account data</span>
+    <span class="q">Check and fill in account data</span>
     <span class="what">See which accounts are missing a CSM, renewal date, or reference and case-study details, find referenceable customers, and fill in reference fields straight into Salesforce.</span>
     <span class="stat">{% if stats.ref_missing is not none %}<b>{{ stats.ref_missing|num }}</b>paying accounts with no “Referenceable” answer{% else %}<b>—</b>loads after the next sync{% endif %}</span>
     <span class="go">Open Accounts →</span>
@@ -29,6 +29,13 @@
     <span class="what">Win rate, ACV and loss reasons against each competitor, for any record type and date range. Drill into the deals behind every number.</span>
     <span class="stat">{% if stats.win_rate is not none %}<b>{{ (stats.win_rate * 100)|round|int }}%</b>win rate on new-sales deals this year{% else %}<b>—</b>loads after the next sync{% endif %}</span>
     <span class="go">Open Win / loss →</span>
+  </a>
+  <a class="task" href="/retention">
+    <span class="tagline">Stickiness</span>
+    <span class="q">See how sticky each plan is</span>
+    <span class="what">Compare Enterprise, Group, Group + API and private practice: who stays, how revenue holds up, and who's paying but not using Healthie.</span>
+    <span class="stat">{% if stats.retention is not none %}<b>{{ (stats.retention * 100)|round|int }}%</b>of customers still paying after 12 months, all plans{% else %}<b>—</b>loads after the next sync{% endif %}</span>
+    <span class="go">Open Retention →</span>
   </a>
   <a class="task" href="/explorer">
     <span class="tagline">Explore</span>

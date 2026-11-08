@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% block title %}Retention{% endblock %}
+{% block nav_retention %}active{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <h1>Retention</h1>
+  <span class="sub">How sticky each plan is: who stays, how revenue holds up, and who's paying but not using Healthie, across Enterprise, Group, Group + API and private practice.</span>
+</div>
+
+<div id="empty-state" hidden></div>
+<div id="page-body">
+
+<section class="step" id="step-compare">
+  <div class="step-head">
+    <span class="step-num">1</span>
+    <div class="step-titles"><h2>Compare plans</h2>
+      <div class="hint">Each customer's plan comes from what ChartMogul bills them. Retention follows the plan they were on 12 months ago: “retained” = still paying today, on any plan.</div></div>
+  </div>
+  <div class="table-wrap" style="max-height:none">
+    <table class="data breakdown" id="compare-table">
+      <thead><tr>
+        <th>Plan</th>
+        <th class="num">Customers</th>
+        <th class="num">MRR</th>
+        <th class="num" title="Started paying in the last 12 months">New (12 mo)</th>
+        <th class="num" title="Median time since each active customer first paid">Median tenure</th>
+        <th style="width:170px" title="Of customers on this plan 12 months ago, the share still paying today">Kept after 12 mo</th>
+        <th class="num" title="Customers on this plan 90 days ago who have stopped paying">Left (90 days)</th>
+        <th class="num" title="Net revenue retention: their MRR today ÷ their MRR 12 months ago, incl. expansion">NRR</th>
+        <th class="num" title="Gross revenue retention: like NRR but without expansion">GRR</th>
+        <th class="num" title="Share of customers (with Healthie usage data) that have at least one active provider">Using it</th>
+        <th class="num" title="Paying, but no active providers or no provider login in 30 days">Paying, not using</th>
+      </tr></thead>
+      <tbody id="compare-body"></tbody>
+    </table>
+  </div>
+  <div class="note-line" id="compare-note"></div>
+</section>
+
+<section class="step" id="step-trend">
+  <div class="step-head">
+    <span class="step-num">2</span>
+    <div class="step-titles"><h2>Is it getting better or worse?</h2>
+      <div class="hint">12-month logo retention, measured at the end of each of the last 12 months. Hover for exact values.</div></div>
+    <div class="step-actions"><button class="linklike" id="trend-toggle" type="button">View as table</button></div>
+  </div>
+  <div id="trend-legend"></div>
+  <div id="trend-chart"></div>
+  <div id="trend-table" hidden></div>
+</section>
+
+<section class="step" id="step-who">
+  <div class="step-head">
+    <span class="step-num">3</span>
+    <div class="step-titles"><h2>See who to look at</h2>
+      <div class="hint">Customers paying but not using Healthie are the likeliest to leave next; the second list shows who already left.</div></div>
+  </div>
+  <div class="fields" style="margin-bottom:16px">
+    <div class="field"><span class="label">Plan</span>
+      <div class="seg" role="group" aria-label="Plan" id="plan-seg">
+        <button data-plan="All plans" aria-pressed="true">All plans</button>
+        {% for p in plans %}<button data-plan="{{ p }}" aria-pressed="false">{{ p }}</button>{% endfor %}
+      </div></div>
+    <div class="field"><span class="label">Show</span>
+      <div class="seg" role="group" aria-label="Which list" id="list-seg">
+        <button data-list="at_risk" aria-pressed="true">Paying, not using</button>
+        <button data-list="churned" aria-pressed="false">Left in the last 90 days</button>
+      </div></div>
+  </div>
+  <p class="scope-note" id="list-scope"></p>
+  <div class="table-wrap">
+    <table class="data" id="list-table">
+      <thead><tr id="list-head"></tr></thead>
+      <tbody id="list-body"></tbody>
+    </table>
+  </div>
+  <div class="note-line" id="list-note"></div>
+</section>
+
+<section class="step" id="step-use">
+  <div class="step-head">
+    <span class="step-num">4</span>
+    <div class="step-titles"><h2>Use this list</h2>
+      <div class="hint">Downloads follow the plan you picked in step 3.</div></div>
+  </div>
+  <div class="uses">
+    <div class="use">
+      <h3>Paying, not using</h3>
+      <p>Customers paying today with no active providers or no provider login in 30 days: plan, MRR, provider counts, last activity, tenure, owner.</p>
+      <p class="where">For CSM outreach or a re-engagement campaign.</p>
+      <button class="btn primary" type="button" data-export="at_risk">↓ Download at-risk CSV</button>
+    </div>
+    <div class="use">
+      <h3>Left in the last 90 days</h3>
+      <p>Customers who stopped paying in the last 90 days: plan, MRR lost, end date, tenure.</p>
+      <p class="where">For churn reviews or a win-back campaign.</p>
+      <button class="btn" type="button" data-export="churned">↓ Download churned CSV</button>
+    </div>
+  </div>
+</section>
+
+</div>
+
+<form id="export-form" method="post" hidden><input type="hidden" name="spec" id="export-spec"></form>
+<script>window.LIGHTNING_BASE = {{ lightning_base|tojson }};</script>
+{% endblock %}
+
+{% block scripts %}<script src="/static/retention.js?v=1"></script>{% endblock %}

@@ -346,7 +346,7 @@ check("detect: 'white label' -> full, 'semi white label' -> semi only",
       (ent.detect_addons(SfdcOpportunity(name="Acme white label")),
        ent.detect_addons(SfdcOpportunity(name="Acme Semi White Label"))), ({"full_wl"}, {"semi_wl"}))
 r = client.get("/enterprise")
-check("enterprise page renders", (r.status_code, "Enterprise add-ons" in r.text), (200, True))
+check("add-ons page renders", (r.status_code, "<h1>Add-ons</h1>" in r.text), (200, True))
 ex = client.get("/api/enterprise").json()
 check("paying only by default", [x["name"] for x in ex["rows"]], ["Ent Co"])
 cells = {k: v["state"] for k, v in ex["rows"][0]["addons"].items()}
@@ -492,8 +492,8 @@ check("top bar says when the data is from; Tour tab and scripts present",
       ("Data as of" in page, 'id="tour-tab"' in page, "/static/tour.js" in page, 'class="step-num"' in page,
        'id="empty-state"' in page), (True, True, True, True, True))
 r = client.get("/")
-check("home: five task cards with live numbers", (r.status_code, r.text.count('class="task"'),
-      "paying Enterprise accounts" in r.text, "win rate" in r.text, "Referenceable" in r.text), (200, 5, True, True, True))
+check("home: six task cards with live numbers", (r.status_code, r.text.count('class="task"'),
+      "paying Enterprise accounts" in r.text, "win rate" in r.text, "Referenceable" in r.text), (200, 6, True, True, True))
 r = client.get("/?product=Group+Plan&view=former", follow_redirects=False)
 check("old explorer links on / redirect to /explorer", (r.status_code, r.headers["location"]),
       (302, "/explorer?product=Group+Plan&view=former"))
@@ -598,6 +598,49 @@ try:
     check("update_account rejects non-allowlisted API fields", "wrote", "refused")
 except sfdc_live.SfdcError as exc:
     check("update_account rejects non-allowlisted API fields", "Not an editable field" in str(exc), True)
+
+print("\nplans + retention:")
+from app import segments as seg  # noqa: E402
+from app import stickiness as stk  # noqa: E402
+check("plan from ChartMogul products",
+      [seg.from_products(x) for x in (["Enterprise Base Fee", "Standard Seats"], ["Group+ Plan"],
+                                      ["Group Plan", "API Access"], ["Group Plan"], ["Plus Plan", "AI Scribe"],
+                                      ["Essentials Plan"], ["Visualize+ Enterprise"], ["AI Scribe"])],
+      ["Enterprise", "Group + API", "Group + API", "Group", "Private practice", "Private practice", None, None])
+check("plan from Salesforce (fallback): stale 'Plus Trial' is private practice; Group + API flag",
+      (seg.from_sfdc("Plus Trial"), seg.from_sfdc("Group", has_api=True), seg.from_sfdc("Canceled Plan")),
+      ("Private practice", "Group + API", None))
+# Acme bills a current Group Plan; Gone Clinic's Group Plan ended 2024-06-30; Multi Co holds Group + Plus
+r = client.get("/api/enterprise?plan=Group")
+check("add-ons page: Group plan accounts (from ChartMogul billing)",
+      sorted(x["name"] for x in r.json()["rows"]), ["Acme Health", "Multi Co"])
+check("add-ons page: Enterprise stays the default", [x["name"] for x in client.get("/api/enterprise").json()["rows"]], ["Ent Co"])
+check("add-ons page: all plans", len(client.get("/api/enterprise?plan=All+plans").json()["rows"]) >= 3, True)
+check("accounts page: plan filter", sorted(x["name"] for x in client.get("/api/accounts?plan=Group").json()["rows"]),
+      ["Acme Health", "Multi Co"])
+r = client.get("/retention")
+check("retention page renders", (r.status_code, "<h1>Retention</h1>" in r.text), (200, True))
+rt = client.get("/api/retention").json()
+summ = {x["plan"]: x for x in rt["summary"]}
+check("retention: plans compared, incl. all-plans row", list(summ), seg.PLANS + ["All plans"])
+check("retention: active Group customers and MRR (Acme 2,500 + Multi 300)",
+      (summ["Group"]["active"], summ["Group"]["mrr"]), (2, 280000))
+check("retention: 12-month cohort and logo retention for Group",
+      (summ["Group"]["cohort_12m"], summ["Group"]["logo_retention_12m"]), (2, 1.0))  # Acme + Multi Co (from Jan 2025)
+check("retention: usage from Metabase (Acme has 9 active providers)",
+      (summ["Group"]["using_share"], summ["Group"]["median_active_providers"]), (1.0, 9))
+check("retention: trend has 13 month points per plan",
+      (len(rt["trend"]["dates"]), sorted(rt["trend"]["series"])), (13, sorted(seg.PLANS)))
+c_ = stk._Cust()
+c_.subs = [(date(2025, 1, 1), date(2025, 6, 1), "Plus Plan"), (date(2025, 6, 1), None, "Group Plan")]
+c_.force_plan, c_.fallback_plan = None, None
+c_.act_dates, c_.act_mrr = [date(2025, 1, 1), date(2025, 6, 1)], [5000, 20000]
+check("customer plan and MRR follow their history",
+      (stk._plan(c_, date(2025, 3, 1)), stk._plan(c_, date(2025, 9, 1)), stk._mrr_at(c_, date(2025, 3, 1)),
+       stk._mrr_at(c_, date(2024, 12, 1)), stk._active(c_, date(2024, 12, 1))),
+      ("Private practice", "Group", 5000, 0, False))
+rows = csv_rows(client.post("/export/retention.csv", data=spec(kind="at_risk", plan="Group")))
+check("at-risk CSV (Group): nobody paying-but-inactive in the seed data", rows, [])
 
 print("\nfails closed (no SESSION_SECRET, no insecure override):")
 os.environ.pop("ALLOW_INSECURE_NO_AUTH")

@@ -258,6 +258,19 @@ ALLOW_INSECURE_NO_AUTH=1 uvicorn app.main:app --reload   # skip Google sign-in l
   only writes the app makes (`sync/sfdc.py` `ACCOUNT_EDITABLE_FIELDS`). Logic in `app/accounts.py`.
 - `/enterprise`: each add-on column header has a status filter (has it / in pipeline / lost / not
   pitched / doesn't have it); click the add-on name to sort by its status.
+- `/retention` (Retention): stickiness by plan. Enterprise, Group + API, Group and Private practice
+  (`app/segments.py`) compared on customers, MRR, new in 12 months, median tenure, 12-month logo
+  retention (cohort = on that plan 12 months ago; retained = still paying, any plan), churn in 90 days,
+  NRR / GRR (from ChartMogul activity MRR), share using Healthie (Metabase active providers) and
+  "paying, not using" (no active providers or no provider login in 30 days). Trend of 12-month
+  retention over the last year; at-risk and churned-90-days lists + CSVs. Logic in `app/stickiness.py`.
+- **Plans** (`app/segments.py`): decided by what ChartMogul bills (Group+ Plan or Group + API Access =
+  "Group + API"; Plus / Essentials / Small Practice / Core / Starter / Beginnings / Student = "Private
+  practice"). Salesforce `Current_Plan__c` is only a fallback: it's stale for private practice (3,886
+  paying accounts still say "Plus Trial" as of 2026-11-08). Exception: accounts Salesforce calls
+  Enterprise stay Enterprise, so the Enterprise views match the SFDC Enterprise report. Add-ons and
+  Accounts have a plan selector (Enterprise by default); Enterprise MRR is Salesforce MRR, other plans
+  use ChartMogul MRR.
 - `/deals` (Win / loss): every synced opportunity with win rate, Year 1 ACV, and loss reasons
   **by competitor**, plus a loss-reason breakdown and a deals table + CSV. Defaults to new-sales
   deals closing this year (the SFDC "Competitor Field Opportunities" report's scope). Logic in

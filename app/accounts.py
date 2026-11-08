@@ -1,4 +1,4 @@
-"""Enterprise account data: is each account's Salesforce data complete (CSM, segment,
+"""Account data by plan (Enterprise by default): is each account's Salesforce data complete (CSM, segment,
 renewal, references, case study, logo...), with a few reference fields editable.
 
 Edits write straight to Salesforce (sync/sfdc.py update_account), but only:
@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 from datetime import date
 
-from app import data
+from app import data, enterprise, segments
 from app.db import AccountEdit, SfdcAccount
 from sync import sfdc
 
@@ -73,22 +73,29 @@ def display(field: dict, raw) -> str | None:
 
 def rows(session, snap, paying: bool = True, status: str = "", csm: str = "", segment: str = "",
          impl: str = "", q: str = "", field: str = "", is_: str = "",
-         account_ids: list[str] | None = None) -> tuple[list[dict], list[dict]]:
-    """(all Enterprise rows, filtered rows). Read straight from the DB (a few hundred
-    rows), so a saved edit shows up immediately."""
+         account_ids: list[str] | None = None,
+         plan: str = segments.ENTERPRISE) -> tuple[list[dict], list[dict]]:
+    """(rows for every account on a plan, filtered rows). Read straight from the DB, so a
+    saved edit shows up immediately."""
     q = (q or "").strip().lower()
     keep = set(account_ids) if account_ids is not None else None
     base, out = [], []
-    for a in session.query(SfdcAccount).filter(SfdcAccount.current_plan == "Enterprise"):
+    for a in session.query(SfdcAccount):
+        acct_plan = data.account_plan(snap, a.id)
+        if not acct_plan:
+            continue
         uuids = snap.customers_by_account.get(a.id, [])
         values = {f["key"]: display(f, getattr(a, f["attr"])) for f in FIELDS}
-        r = {"id": a.id, "name": data.clean_name(a.name), "sfdc_name": a.name,
-             "customer_uuid": uuids[0] if uuids else None, "mrr": a.sfdc_mrr,
+        r = {"id": a.id, "name": data.clean_name(a.name), "sfdc_name": a.name, "plan": acct_plan,
+             "customer_uuid": uuids[0] if uuids else None,
+             "mrr": enterprise.plan_mrr(snap, a.id, a.sfdc_mrr, acct_plan),
              "customer_status": a.customer_status, "csm": a.csm_name, "segment": a.account_segment,
              "implementation_status": a.implementation_status, "values": values,
              "missing": sum(1 for v in values.values() if v is None)}
         base.append(r)
-        if paying and not (a.sfdc_mrr or 0) > 0:
+        if not segments.matches(acct_plan, plan):
+            continue
+        if paying and not (r["mrr"] or 0) > 0:
             continue
         if status and a.customer_status != status:
             continue
@@ -163,8 +170,8 @@ def edit(session, user: dict, account_id: str, key: str, value, expected) -> dic
     field = FIELD[key]
     api = EDITABLE[key]
     acct = session.get(SfdcAccount, account_id)
-    if acct is None or acct.current_plan != "Enterprise":
-        raise EditError("Unknown Enterprise account")
+    if acct is None:
+        raise EditError("Unknown account")
     new = _clean(field, value)
     log = AccountEdit(user_email=user["email"].lower(), account_id=acct.id, account_name=acct.name,
                       field=key, sfdc_field=api, new_value=new)

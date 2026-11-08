@@ -4,8 +4,8 @@
 
 {% block content %}
 <div class="page-head">
-  <h1>Enterprise accounts</h1>
-  <span class="sub">Check that each Enterprise account's Salesforce data is complete (CSM, renewal, references, case study, logo) and fill in what's missing.</span>
+  <h1>Accounts</h1>
+  <span class="sub">Check that each account's Salesforce data is complete (CSM, renewal, references, case study, logo), on any plan, and fill in what's missing.</span>
 </div>
 
 <div id="empty-state" hidden></div>
@@ -15,13 +15,21 @@
   <div class="step-head">
     <span class="step-num">1</span>
     <div class="step-titles"><h2>Choose accounts</h2>
-      <div class="hint">Start with all paying Enterprise accounts, or narrow by CSM, segment or status.</div></div>
+      <div class="hint">Pick a plan (Enterprise by default), then narrow by CSM, segment or status if you like.</div></div>
   </div>
   <div class="fields" role="search">
+    <div class="field"><label for="f-plan">Plan</label>
+      <select id="f-plan">
+        <option value="Enterprise">Enterprise</option>
+        <option value="Group + API">Group + API</option>
+        <option value="Group">Group</option>
+        <option value="Private practice">Private practice</option>
+        <option value="All plans">All plans</option>
+      </select></div>
     <div class="field"><span class="label">Accounts</span>
       <div class="seg" role="group" aria-label="Which Enterprise accounts" id="paying-seg">
         <button data-paying="1" aria-pressed="true">Paying</button>
-        <button data-paying="0" aria-pressed="false">All Enterprise</button>
+        <button data-paying="0" aria-pressed="false">Include non-paying</button>
       </div></div>
     <div class="field"><label for="f-csm">CSM</label><select id="f-csm"><option value="">Any</option></select></div>
     <div class="field"><label for="f-segment">Segment</label><select id="f-segment"><option value="">Any</option></select></div>
@@ -59,6 +67,7 @@
       <tbody id="acct-body"></tbody>
     </table>
   </div>
+  <div class="note-line" id="table-note"></div>
 </section>
 
 <section class="step" id="step-use">
@@ -97,4 +106,4 @@
 <script>window.LIGHTNING_BASE = {{ lightning_base|tojson }}; window.CAN_EDIT = {{ can_edit|tojson }};</script>
 {% endblock %}
 
-{% block scripts %}<script src="/static/accounts.js?v=1"></script>{% endblock %}
+{% block scripts %}<script src="/static/accounts.js?v=2"></script>{% endblock %}
