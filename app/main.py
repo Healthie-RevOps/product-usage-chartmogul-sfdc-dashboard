@@ -156,13 +156,9 @@ def _iso(d):
     return d.isoformat() if d else None
 
 
-def _last_run(session):
-    return session.query(SyncRun).order_by(desc(SyncRun.id)).first()
-
-
 def _page(request, name, ctx, session, status_code=200):
     ctx = {"user": auth.current_user(request), "insecure": auth.insecure(),
-           "last_run": _last_run(session), "lightning_base": LIGHTNING_BASE, **ctx}
+           "sync": data.sync_status(session), "lightning_base": LIGHTNING_BASE, **ctx}
     return templates.TemplateResponse(request, name, ctx, status_code=status_code)
 
 
@@ -459,7 +455,8 @@ def api_enterprise(paying: bool = True, status: str = "", csm: str = "", segment
     try:
         base, rows = _ent_rows(session, EntSpec(paying=paying, status=status, csm=csm,
                                                 segment=segment, impl=impl, q=q, addons=addon))
-        return JSONResponse({"rows": rows, "summary": enterprise.summary(rows),
+        return JSONResponse({"has_data": bool(base), "sync": data.sync_status(session),
+                             "rows": rows, "summary": enterprise.summary(rows),
                              "totals": enterprise.totals(rows), "facets": enterprise.facets(base),
                              "addons": [{"key": a["key"], "label": a["label"]}
                                         for a in enterprise.ADDONS]})
@@ -577,6 +574,7 @@ def api_deals(record_type: str = "", date_from: str = "", date_to: str = "", out
         comp_rows = rows if not s.competitor else _deal_rows(session, s.model_copy(update={"competitor": ""}))[1]
         reason_rows = rows if not s.reason else _deal_rows(session, s.model_copy(update={"reason": ""}))[1]
         return JSONResponse({
+            "has_data": bool(base), "sync": data.sync_status(session),
             "totals": deals.totals(rows), "competitors": deals.by_competitor(comp_rows),
             "reasons": deals.by_reason(reason_rows), "facets": deals.facets(base),
             "rows": rows[:DEAL_ROW_LIMIT], "total_rows": len(rows), "limit": DEAL_ROW_LIMIT,
@@ -645,6 +643,7 @@ def api_quality(date_from: str = "", owner: str = "", issue: str = "", q: str = 
         owners = sorted({r["owner"] for r in deal_base if r["owner"]}
                         | {m["csm"] for m in mismatch_base if m["csm"]}, key=str.lower)
         return JSONResponse({
+            "has_data": bool(deal_base), "sync": data.sync_status(session),
             "summary": quality.rule_summary(scoped, mism), "owners": quality.by_owner(scoped),
             "rows": work[:QUALITY_ROW_LIMIT], "total_rows": len(work), "limit": QUALITY_ROW_LIMIT,
             "mismatches": mism_shown, "facets": {"owner": owners},

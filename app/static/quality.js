@@ -51,6 +51,7 @@
       const p = new URLSearchParams(Object.entries(spec()).filter(([, v]) => v));
       const d = await fetch('/api/quality?' + p).then(r => r.json());
       if (my !== seq) return;
+      if (!App.dataState(d, 'data-quality results')) return;
       state.data = d;
       if (!state.facetsLoaded) {
         d.facets.owner.forEach(v => { const o = h('option', null, v); o.value = v; $('f-owner').appendChild(o); });

@@ -209,7 +209,7 @@
     }
     Charts.line($('mrr-chart'), { dates: tr.months, series: mrrSeries, area: !multi, endLabels: multi,
       height: 240, ariaLabel: 'MRR by month',
-      emptyText: 'Revenue history fills in after the next nightly sync (09:00 UTC).' });
+      emptyText: 'Revenue history fills in after the next daily sync (12:00 UTC).' });
     Charts.line($('cust-chart'), { dates: tr.customerMonths, series: [{ name: 'Customers', color: ACCENT, values: tr.customers }],
       area: true, height: 240, yFormat: fmt.int, yAxisFormat: fmt.intAxis, ariaLabel: 'Customers by month' });
     const rows = tr.months.map((m, i) => ({ m, i })).reverse();

@@ -7,7 +7,7 @@
 <link rel="icon" href="/static/healthie-mark.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/static/app.css?v=9">
+<link rel="stylesheet" href="/static/app.css?v=10">
 </head>
 <body>
 <header class="topbar">
@@ -20,11 +20,12 @@
     <a class="tab {% block nav_enterprise %}{% endblock %}" href="/enterprise">Enterprise</a>
     <a class="tab {% block nav_deals %}{% endblock %}" href="/deals">Win / loss</a>
     <a class="tab {% block nav_quality %}{% endblock %}" href="/quality">Data quality</a>
+    <button class="tab tab-btn" id="tour-tab" type="button" title="A two-minute walkthrough of the app">Tour</button>
   </nav>
   <div class="topbar-right">
-    {% if last_run %}
-    <span title="ChartMogul + Salesforce sync, nightly at 09:00 UTC">
-      <i class="sync-dot {% if last_run.status != 'success' %}bad{% endif %}"></i>Synced {{ last_run.started_at.strftime("%b %d, %H:%M UTC") }}{% if last_run.status != 'success' %} · {{ last_run.status }}{% endif %}
+    {% if sync %}
+    <span class="sync-status" title="Salesforce + ChartMogul sync, daily at {{ sync.schedule_utc }} UTC.{% if sync.last_error %} Last attempt: {{ sync.last_error }}{% endif %}">
+      <i class="sync-dot {% if sync.running_since %}busy{% elif sync.last_failed or not sync.data_as_of %}bad{% endif %}"></i>{% if sync.data_as_of %}Data as of {{ sync.data_as_of_label }}{% else %}No data yet{% endif %}{% if sync.running_since %} · sync running{% elif sync.last_failed %} · last sync failed{% endif %}
     </span>
     {% endif %}
     {% if user %}<span title="{{ user.email }}">{{ user.name }}</span>{% endif %}
@@ -38,6 +39,8 @@
 {% block content %}{% endblock %}
 </main>
 <script src="/static/charts.js?v=5"></script>
+<script src="/static/common.js?v=1"></script>
+<script src="/static/tour.js?v=1"></script>
 {% block scripts %}{% endblock %}
 </body>
 </html>

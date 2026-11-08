@@ -485,6 +485,28 @@ check("fix list CSV: one row per fix, with suggestion",
       [("No Expansion Product", "Set Expansion Product (looks like: AI Scribe)"),
        ("No add-on loss reason", "Set Add-On Close Lost Reason"), ("Won, no Year 1 ACV", "Set Year 1 ACV")])
 
+print("\nsync status, guides, tour:")
+from app import data as data_mod  # noqa: E402
+page = client.get("/enterprise").text
+check("top bar says when the data is from; Tour tab and scripts present",
+      ("Data as of" in page, 'id="tour-tab"' in page, "/static/tour.js" in page, 'data-guide="enterprise"' in page,
+       'id="empty-state"' in page), (True, True, True, True, True))
+check("APIs report has_data", (client.get("/api/enterprise").json()["has_data"],
+                               client.get("/api/deals").json()["has_data"],
+                               client.get("/api/quality").json()["has_data"]), (True, True, True))
+with session_scope() as s:
+    s.add(SyncRun(status="running", started_at=datetime.utcnow()))
+st = data_mod.sync_status(SessionLocal_ := main.SessionLocal())
+SessionLocal_.close()
+check("a run in progress shows as running; data_as_of = last success",
+      (st["running_since"] is not None, st["data_as_of"] is not None, st["last_failed"]), (True, True, False))
+check("top bar shows the running sync", "sync running" in client.get("/deals").text, True)
+with session_scope() as s:
+    s.query(SyncRun).filter(SyncRun.status == "running").update({"started_at": datetime(2026, 1, 1)})
+st = data_mod.sync_status(SessionLocal_ := main.SessionLocal())
+SessionLocal_.close()
+check("a 'running' row older than 3h isn't shown as running", st["running_since"], None)
+
 print("\nfails closed (no SESSION_SECRET, no insecure override):")
 os.environ.pop("ALLOW_INSECURE_NO_AUTH")
 check("/ -> 503", client.get("/").status_code, 503)
@@ -621,7 +643,12 @@ def run_main(snapshot_outcomes):
 
 
 transient = cm_mod.ChartMogulTransientError("Gave up on /customers after 9 attempts")
+with session_scope() as s:   # a run killed mid-way (e.g. its deployment was replaced)
+    s.add(SyncRun(status="running", started_at=datetime(2026, 11, 8, 19, 5)))
 c = run_main([transient, None])
+with session_scope() as s:
+    killed = s.query(SyncRun).filter(SyncRun.started_at == datetime(2026, 11, 8, 19, 5)).one()
+    check("next sync marks a killed run as interrupted", (killed.status, killed.error[:11]), ("failed", "Interrupted"))
 check("CM down once -> waits, retries, succeeds",
       (c["snapshot"], c["slept"], c["metabase"], c["exit"]),
       (2, [rs.SNAPSHOT_RETRY_WAIT_S], 1, None))

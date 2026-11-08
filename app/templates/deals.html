@@ -6,7 +6,20 @@
 <div class="page-head">
   <h1>Win / loss</h1>
   <span class="sub">Why we win and lose deals, and against whom. Salesforce opportunities, open or closed since 2024.</span>
+  <button class="linklike" id="guide-toggle" type="button">How to use this page</button>
 </div>
+<div class="guide" data-guide="deals" hidden>
+  <div class="guide-head"><b>What you can do here</b><span class="spacer"></span>
+    <button class="linklike" type="button" data-start-tour>Take the tour</button>
+    <button class="linklike guide-close" type="button">Hide</button></div>
+  <ul>
+    <li><b>Know where you win:</b> win rate, ACV and top loss reasons against each competitor. Click a competitor to filter the page to their deals.</li>
+    <li><b>Understand losses:</b> loss reasons by share and lost ACV, regrettable vs not. Click a reason to see the deals.</li>
+    <li><b>Change the lens:</b> record type, close dates, outcome, owner or incumbent at the top; export the deals as CSV.</li>
+  </ul>
+</div>
+<div id="empty-state" hidden></div>
+<div id="page-body">
 
 <div class="filters" role="search">
   <select id="f-rt" aria-label="Record type"><option value="">All record types</option></select>
@@ -94,8 +107,10 @@
   <div class="note-line" id="deals-note"></div>
 </section>
 
+</div>
+
 <form id="export-form" method="post" hidden><input type="hidden" name="spec" id="export-spec"></form>
 <script>window.LIGHTNING_BASE = {{ lightning_base|tojson }};</script>
 {% endblock %}
 
-{% block scripts %}<script src="/static/deals.js?v=2"></script>{% endblock %}
+{% block scripts %}<script src="/static/deals.js?v=3"></script>{% endblock %}

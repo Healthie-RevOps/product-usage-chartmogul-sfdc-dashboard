@@ -146,9 +146,30 @@ Design decisions (deliberate — don't undo casually):
      Metabase step runs either way.
      The CLI's `environment edit --service-config` did not apply this (v4.44), so set it in the UI.
 4. Set env vars on **both** services (see `.env.example`).
-5. Trigger the sync service once manually, then open the web service URL.
+5. Trigger the sync service once manually (Run now), then open the web service URL.
 6. Web service → Settings → Networking → generate the public domain. Consider
    restricting access (Railway has no built-in auth — see Auth below).
+
+### Deploys: automatic from `main`, after CI passes
+
+Until 2026-11-08 both services ran manual `railway up` uploads, so production silently
+fell behind `main`. Set up auto-deploy once, for **each** service (`web` and `sync`):
+
+1. Railway → service → **Settings → Source → Connect Repo** →
+   `Healthie-RevOps/product-usage-chartmogul-sfdc-dashboard`, branch **`main`**. (If the repo
+   isn't listed, a GitHub org admin must grant the Railway GitHub app access to it.)
+2. Same page: turn on **Wait for CI**. Deploys of `main` then wait for the GitHub Actions
+   smoke tests (`.github/workflows/ci.yml`) and are skipped if they fail.
+3. Keep the start command as is (`RAILPACK_START_CMD` / `python start.py`).
+
+Notes:
+- Deploying `sync` does **not** run it; it runs on its cron schedule. To load new data right
+  away, use **Run now** on the `sync` service.
+- Don't redeploy `sync` while it's running: Railway stops the old deployment and the run is
+  lost. The next run marks it "Interrupted" and the dashboard keeps the previous data.
+- Manual fallback, from the repo folder only:
+  `railway up . --path-as-root --service <web|sync> --detach`. A plain `railway up` archives
+  the directory `railway link` was run in, which on one machine was the home folder.
 
 ## Dependencies before first successful run
 
@@ -179,7 +200,7 @@ healthie-events-calendar and medallion-credentialing:
 ## Local dev
 
 ```bash
-pip install -r requirements.txt
+pip install -r requirements-dev.txt   # includes requirements.txt + test deps
 cp .env.example .env   # fill in keys
 python -m sync.run_sync          # populates local.db (SQLite fallback)
 ALLOW_INSECURE_NO_AUTH=1 uvicorn app.main:app --reload   # skip Google sign-in locally
@@ -212,6 +233,9 @@ ALLOW_INSECURE_NO_AUTH=1 uvicorn app.main:app --reload   # skip Google sign-in l
   spelling variants merge; loss reasons drop the `R:`/`NR:` prefix into a separate
   regrettable / non-regrettable field.
 
+- **Tour** tab (any page): a 15-step guided walkthrough of all four sections (`app/static/tour.js`),
+  offered once on a person's first visit. Each page also has a "What you can do here" panel, and
+  pages explain when their data hasn't loaded yet (last good sync, a sync in progress, next run).
 - `/quality` (Data quality): a Salesforce fix list with an owner per fix. Deal rules: closed
   new-sales deal with no competitor answer, lost deal with no loss reason, lost add-on deal with
   no add-on loss reason, Expansion Deal with no Expansion Product (with a suggestion from the

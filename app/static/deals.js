@@ -72,6 +72,7 @@
     try {
       const d = await fetch('/api/deals?' + apiParams()).then(r => r.json());
       if (my !== seq) return;
+      if (!App.dataState(d, 'win / loss data')) return;
       state.data = d;
       if (!state.facetsLoaded) { fillFacets(d.facets); state.facetsLoaded = true; }
       renderChips(); renderKpis(); renderCompetitors(); renderReasons(); renderDeals();

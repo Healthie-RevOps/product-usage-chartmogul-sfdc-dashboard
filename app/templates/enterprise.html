@@ -6,7 +6,20 @@
 <div class="page-head">
   <h1>Enterprise add-ons</h1>
   <span class="sub">For each add-on: which Enterprise accounts have it, are being pitched it, said no, or were never pitched.</span>
+  <button class="linklike" id="guide-toggle" type="button">How to use this page</button>
 </div>
+<div class="guide" data-guide="enterprise" hidden>
+  <div class="guide-head"><b>What you can do here</b><span class="spacer"></span>
+    <button class="linklike" type="button" data-start-tour>Take the tour</button>
+    <button class="linklike guide-close" type="button">Hide</button></div>
+  <ul>
+    <li><b>Find accounts to pitch:</b> click a number in Add-on adoption, e.g. AI Scribe → <i>Not pitched</i>, to list those accounts. Combine with CSM, segment, or implementation status.</li>
+    <li><b>See the story behind each cell:</b> hover for the deal, stage, loss reason, competitor and revisit date; click an open or lost cell to open the deal in Salesforce.</li>
+    <li><b>Build a campaign list:</b> export the accounts, or the providers &amp; admins at them (active, with email, not opted out). Tick accounts first to narrow it.</li>
+  </ul>
+</div>
+<div id="empty-state" hidden></div>
+<div id="page-body">
 
 <div class="filters" role="search">
   <div class="seg" role="group" aria-label="Which Enterprise accounts" id="paying-seg">
@@ -70,9 +83,11 @@
   <button class="btn small primary" id="selbar-contacts">↓ Their providers &amp; admins</button>
 </div>
 
+</div>
+
 <form id="export-form" method="post" hidden><input type="hidden" name="spec" id="export-spec"></form>
 <script id="addons-data" type="application/json">{{ addons|tojson }}</script>
 <script>window.LIGHTNING_BASE = {{ lightning_base|tojson }};</script>
 {% endblock %}
 
-{% block scripts %}<script src="/static/enterprise.js?v=1"></script>{% endblock %}
+{% block scripts %}<script src="/static/enterprise.js?v=2"></script>{% endblock %}
