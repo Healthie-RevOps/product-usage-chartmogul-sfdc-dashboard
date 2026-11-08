@@ -25,7 +25,7 @@
   <div class="topbar-right">
     {% if sync %}
     <span class="sync-status" title="Salesforce + ChartMogul sync, daily at {{ sync.schedule_utc }} UTC.{% if sync.last_error %} Last attempt: {{ sync.last_error }}{% endif %}">
-      <i class="sync-dot {% if sync.running_since %}busy{% elif sync.last_failed or not sync.data_as_of %}bad{% endif %}"></i>{% if sync.data_as_of %}Data as of {{ sync.data_as_of_label }}{% else %}No data yet{% endif %}{% if sync.running_since %} · sync running{% elif sync.last_failed %} · last sync failed{% endif %}
+      <i class="sync-dot {% if sync.running_since %}busy{% elif sync.last_failed or sync.last_partial or not sync.data_as_of %}bad{% endif %}"></i>{% if sync.data_as_of %}Data as of {{ sync.data_as_of_label }}{% else %}No data yet{% endif %}{% if sync.running_since %} · sync running{% elif sync.last_failed %} · last sync failed{% elif sync.last_partial %} · last sync partly failed{% endif %}
     </span>
     {% endif %}
     {% if user %}<span title="{{ user.email }}">{{ user.name }}</span>{% endif %}

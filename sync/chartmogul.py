@@ -101,6 +101,23 @@ def iter_customers(statuses: list[str]):
         yield from _paginate("/customers", "entries", {"status": status})
 
 
+def iter_activities_since(start_iso: str):
+    """Account-wide MRR activity feed (new_biz, expansion, contraction, churn,
+    reactivation) since start_iso. One fast paginated stream; the nightly incremental
+    refresh uses it to find which customers changed (~30 a day of ~15k)."""
+    yield from _paginate("/activities", "entries", {"start-date": start_iso}, per_page=200)
+
+
+def fetch_customer(customer_uuid: str) -> dict | None:
+    """One customer record (same shape as /customers list entries); None if deleted."""
+    try:
+        return _get(f"/customers/{customer_uuid}")
+    except ChartMogulError as exc:
+        if str(exc).startswith("404"):
+            return None
+        raise
+
+
 def iter_plans():
     """Every plan (product/SKU) across data sources."""
     yield from _paginate("/plans", "plans")
