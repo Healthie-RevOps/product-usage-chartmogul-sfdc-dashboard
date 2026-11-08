@@ -356,6 +356,52 @@ check("gethealthie.com allowed", auth.email_allowed("a@gethealthie.com"), True)
 check("lookalike domain refused", auth.email_allowed("a@gethealthie.com.evil.com"), False)
 check("gmail refused", auth.email_allowed("a@gmail.com"), False)
 
+print("\nSFDC field mapping (offline):")
+from sync import sfdc as sfdc_mod  # noqa: E402
+
+_saved = (sfdc_mod._visible_fields, sfdc_mod._query_all, dict(sfdc_mod._optional_cache))
+sfdc_mod._optional_cache.clear()
+# This user can't see Competitor__c or Stripe_Has_Zoom__c: skipped, not a failure
+sfdc_mod._visible_fields = lambda obj: (
+    {f.split(".")[0].replace("__r", "__c") for f in sfdc_mod.ACCOUNT_OPTIONAL_FIELDS.values()}
+    | set(sfdc_mod.OPPORTUNITY_OPTIONAL_FIELDS.values())) - {"Competitor__c", "Stripe_Has_Zoom__c"}
+captured = []
+
+
+def fake_query_all(soql):
+    captured.append(soql)
+    if "FROM Opportunity" in soql:
+        yield {"Id": "006X", "AccountId": "001X", "Account": {"Name": "Prospect Co"},
+               "Name": "Prospect Co - New", "RecordType": {"Name": "Initial Sales Opportunity"},
+               "StageName": "Closed Lost", "IsClosed": True, "IsWon": False,
+               "CloseDate": "2026-03-01", "Owner": {"Name": "Rep"},
+               "Secondary_Competitor__c": "Elation", "Add_On_Close_Lost_Reason__c": None}
+    else:
+        yield {"Id": "001X", "Name": "Ent Co", "Current_Plan__c": "Enterprise",
+               "CSM_v2__r": {"Name": "Casey CSM"}, "Stripe_Has_AI_Scribe__c": True,
+               "Stripe_Has_Zoom__c": True, "MRR__c": 5000.0}
+
+
+sfdc_mod._query_all = fake_query_all
+try:
+    opp = next(sfdc_mod.fetch_opportunities("2024-01-01"))
+    acct = next(sfdc_mod.fetch_accounts("Current_Plan__c = 'Enterprise'"))
+finally:
+    sfdc_mod._visible_fields, sfdc_mod._query_all = _saved[0], _saved[1]
+    sfdc_mod._optional_cache.clear()
+    sfdc_mod._optional_cache.update(_saved[2])
+check("opp: account name, record type, owner via relationships",
+      (opp["account_name"], opp["record_type"], opp["owner_name"], opp["is_won"]),
+      ("Prospect Co", "Initial Sales Opportunity", "Rep", False))
+check("opp: hidden field skipped in SOQL and None in row",
+      (", Competitor__c" in captured[0], opp["competitor"], opp["secondary_competitor"]),
+      (False, None, "Elation"))
+check("opp: open deals always included", "IsClosed = false OR CloseDate >= 2024-01-01" in captured[0], True)
+check("account: enterprise fields + CSM relationship",
+      (acct["current_plan"], acct["csm_name"], acct["sfdc_mrr"]), ("Enterprise", "Casey CSM", 5000.0))
+check("account: add-on flags are booleans; hidden flag -> False",
+      (acct["has_ai_scribe"], acct["has_erx"], acct["has_zoom"]), (True, False, False))
+
 print("\nsync orchestration (ChartMogul down):")
 from sync import run_sync as rs  # noqa: E402
 from sync import chartmogul as cm_mod  # noqa: E402

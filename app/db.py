@@ -121,6 +121,35 @@ class SfdcAccount(Base):
     health_score = Column(String)                        # Customer_Health_Score__c
     sfdc_arr = Column(Float)                             # ARR__c (dollars)
 
+    # Enterprise attributes (sync/sfdc.py ACCOUNT_ENTERPRISE_FIELDS). SFDC's own values,
+    # matching what the SFDC "Enterprise Customer Attribute Reporting" report shows.
+    current_plan = Column(String, index=True)            # Current_Plan__c (e.g. Enterprise)
+    customer_status = Column(String)                     # Customer_Status__c
+    sfdc_mrr = Column(Float)                             # MRR__c (dollars)
+    implementation_status = Column(String)
+    csm_name = Column(String)
+    website = Column(String)
+    renewal_date = Column(Date)
+    healthie_org_count = Column(Float)
+    account_segment = Column(String)                     # Strategic / Growth / Foundational
+    enterprise_category = Column(String)                 # multi-select, ";"-separated
+    current_ehr = Column(String)
+    kickoff_date = Column(Date)
+
+    # Add-on flags (Stripe_Has_* checkboxes, synced into SFDC from Stripe)
+    has_active_client = Column(Boolean, default=False)
+    has_sub_org = Column(Boolean, default=False)
+    has_ai_scribe = Column(Boolean, default=False)
+    has_api_access = Column(Boolean, default=False)
+    has_erx = Column(Boolean, default=False)
+    has_full_white_label = Column(Boolean, default=False)
+    has_semi_white_label = Column(Boolean, default=False)
+    has_hubspot = Column(Boolean, default=False)
+    has_shopify = Column(Boolean, default=False)
+    has_standard_seats = Column(Boolean, default=False)
+    has_support_seats = Column(Boolean, default=False)
+    has_zoom = Column(Boolean, default=False)
+
     customers = relationship("Customer", back_populates="sfdc_account")
     contacts = relationship("SfdcContact", back_populates="account",
                             cascade="all, delete-orphan")
@@ -145,6 +174,7 @@ class SfdcContact(Base):
     last_active = Column(DateTime)                             # stale since mid-2024
     is_org_admin = Column(Boolean, default=False)
     is_org_owner = Column(Boolean, default=False)
+    email_opt_out = Column(Boolean, default=False)            # HasOptedOutOfEmail
 
     account = relationship("SfdcAccount", back_populates="contacts")
 
@@ -172,6 +202,50 @@ class SfdcContract(Base):
     def value(self):
         """Best available contract value: TCV, else Year-1 ACV, else Amount."""
         return self.total_contract_value or self.year1_acv or self.amount
+
+
+class SfdcOpportunity(Base):
+    """Every open Opportunity plus every closed one since SFDC_OPPS_CLOSED_SINCE, any stage
+    or record type, whether or not the account matches a ChartMogul customer (lost
+    prospects never do). No FK to sfdc_accounts: most of these accounts aren't synced,
+    so the account name is stored here. Raw SFDC values; product detection and
+    competitor normalization happen in the app so they can change without a resync."""
+    __tablename__ = "sfdc_opportunities"
+
+    id = Column(String, primary_key=True)                # Opportunity Id
+    account_id = Column(String, index=True)
+    account_name = Column(String)
+    name = Column(String)
+    record_type = Column(String, index=True)             # Initial Sales / Expansion Deal / ...
+    opp_type = Column(String, index=True)                # New Deal / Add-on / Expansion / ...
+    stage = Column(String, index=True)
+    is_closed = Column(Boolean, default=False)
+    is_won = Column(Boolean, default=False)
+    close_date = Column(Date, index=True)
+    created_date = Column(DateTime)
+    amount = Column(Float)
+    probability = Column(Float)                          # percent, 0-100
+    next_step = Column(Text)
+    owner_name = Column(String)
+
+    year1_acv = Column(Float)                            # Year_1_ACV__c
+    arr_delta = Column(Float)                            # ARR_Delta__c
+    loss_reason = Column(String)                         # Loss_Reason__c
+    loss_reason_detail = Column(Text)
+    addon_loss_reason = Column(String)                   # Add_On_Close_Lost_Reason__c
+    why_won = Column(Text)
+    competitor = Column(String)                          # Competitor__c
+    secondary_competitor = Column(String)
+    competitor_text = Column(String)                     # Competitor_Free_Text__c
+    incumbent = Column(String)
+    competition = Column(String)
+    current_situation = Column(String)
+    expansion_product = Column(String)                   # Expansion_Product__c (mostly blank)
+    expansion_product_text = Column(String)
+    additional_products = Column(String)
+    target_price = Column(Float)                         # Customer_Target_Price__c
+    value_gap = Column(Text)                             # Perceived_Value_Gap__c
+    revisit_date = Column(Date)                          # Revisit_Later_Date__c
 
 
 class HealthieOrgUsage(Base):
@@ -203,6 +277,7 @@ class SyncRun(Base):
     accounts_synced = Column(Integer, default=0)
     contacts_synced = Column(Integer, default=0)
     contracts_synced = Column(Integer, default=0)
+    opportunities_synced = Column(Integer, default=0)
     matched = Column(Integer, default=0)
     unmatched = Column(Integer, default=0)
     error = Column(Text)
