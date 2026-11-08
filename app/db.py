@@ -136,6 +136,16 @@ class SfdcAccount(Base):
     current_ehr = Column(String)
     kickoff_date = Column(Date)
 
+    # Reference / marketing fields. The first five are editable from the dashboard
+    # (sync/sfdc.py ACCOUNT_EDITABLE_FIELDS; app/accounts.py).
+    referenceable = Column(String)                       # Referenceable__c: Yes / No
+    reference_date = Column(Date)
+    contracted_case_study = Column(String)
+    case_study_complete = Column(String)
+    contracted_logo = Column(String)
+    case_study_available = Column(Boolean)               # calculated in SFDC, read-only
+    logo_use_permitted = Column(String)                  # read-only for the app's login
+
     # Add-on flags (Stripe_Has_* checkboxes, synced into SFDC from Stripe)
     has_active_client = Column(Boolean, default=False)
     has_sub_org = Column(Boolean, default=False)
@@ -263,6 +273,25 @@ class HealthieOrgUsage(Base):
     clients = Column(Integer)                            # patients, excl. test users
     active_clients = Column(Integer)                     # CLIENT_IS_ACTIVE
     synced_at = Column(DateTime, server_default=func.now())
+
+
+class AccountEdit(Base):
+    """Every attempted dashboard write to a Salesforce Account, with who made it.
+    Salesforce records these edits as the integration login, so this is the record of
+    which person changed what. Never cleared by the sync."""
+    __tablename__ = "account_edits"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    at = Column(DateTime, server_default=func.now(), index=True)
+    user_email = Column(String, index=True)
+    account_id = Column(String, index=True)
+    account_name = Column(String)
+    field = Column(String)                               # dashboard column, e.g. referenceable
+    sfdc_field = Column(String)                          # API name, e.g. Referenceable__c
+    old_value = Column(String)
+    new_value = Column(String)
+    status = Column(String)                              # saved | conflict | error
+    error = Column(Text)
 
 
 class SyncRun(Base):

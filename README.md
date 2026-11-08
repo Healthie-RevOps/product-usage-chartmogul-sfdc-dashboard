@@ -25,7 +25,7 @@ SFDC credentials.
 ### Open items
 1. **SFDC auth is interim.** `sync` logs in with the shared `vivek.marthi+netlify@gethealthie.com`
    username/password/token (SOAP login), copied from `healthie-bottoms-up-model`. The code
-   never writes to SFDC, but that user is not the read-only integration user. When the
+   only writes the five Accounts-page reference fields (when `SFDC_EDITORS` is set), but that user is not a dedicated integration user. When the
    Connected App exists, set `SFDC_CLIENT_ID`/`SFDC_CLIENT_SECRET` on `sync`. Client
    credentials take priority automatically, then delete the `SFDC_USERNAME`/`PASSWORD`/
    `SECURITY_TOKEN` vars. That user can't see `Product_Adoption_Score__c`. The sync skips
@@ -248,6 +248,16 @@ ALLOW_INSECURE_NO_AUTH=1 uvicorn app.main:app --reload   # skip Google sign-in l
   - CSVs: accounts with every add-on state, and **providers & admins** at those accounts (active
     Healthie users with a Standard seat or owner/admin role, with an email, not opted out).
 
+- `/accounts` (Accounts): Enterprise account data completeness (CSM, segment, renewal, kickoff,
+  Org ID, reference / case study / logo fields) with "missing" and "Yes" filters and a CSV.
+  **Writes to Salesforce:** people listed in `SFDC_EDITORS` (web service) can edit five reference
+  fields inline: Referenceable, Reference Date, Contracted to Case Study, Case Study Complete,
+  Contracted to Use Logo. Each save re-reads the field from Salesforce first and writes nothing if it
+  changed since the last sync; every attempt (saved / conflict / error) is logged in `account_edits`
+  with the person's email, since Salesforce records the change as the app's login. These are the
+  only writes the app makes (`sync/sfdc.py` `ACCOUNT_EDITABLE_FIELDS`). Logic in `app/accounts.py`.
+- `/enterprise`: each add-on column header has a status filter (has it / in pipeline / lost / not
+  pitched / doesn't have it); click the add-on name to sort by its status.
 - `/deals` (Win / loss): every synced opportunity with win rate, Year 1 ACV, and loss reasons
   **by competitor**, plus a loss-reason breakdown and a deals table + CSV. Defaults to new-sales
   deals closing this year (the SFDC "Competitor Field Opportunities" report's scope). Logic in

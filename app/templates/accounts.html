@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+{% block title %}Accounts{% endblock %}
+{% block nav_accounts %}active{% endblock %}
+
+{% block content %}
+<div class="page-head">
+  <h1>Enterprise accounts</h1>
+  <span class="sub">Check that each Enterprise account's Salesforce data is complete (CSM, renewal, references, case study, logo) and fill in what's missing.</span>
+</div>
+
+<div id="empty-state" hidden></div>
+<div id="page-body">
+
+<section class="step" id="step-choose">
+  <div class="step-head">
+    <span class="step-num">1</span>
+    <div class="step-titles"><h2>Choose accounts</h2>
+      <div class="hint">Start with all paying Enterprise accounts, or narrow by CSM, segment or status.</div></div>
+  </div>
+  <div class="fields" role="search">
+    <div class="field"><span class="label">Accounts</span>
+      <div class="seg" role="group" aria-label="Which Enterprise accounts" id="paying-seg">
+        <button data-paying="1" aria-pressed="true">Paying</button>
+        <button data-paying="0" aria-pressed="false">All Enterprise</button>
+      </div></div>
+    <div class="field"><label for="f-csm">CSM</label><select id="f-csm"><option value="">Any</option></select></div>
+    <div class="field"><label for="f-segment">Segment</label><select id="f-segment"><option value="">Any</option></select></div>
+    <div class="field"><label for="f-impl">Implementation</label><select id="f-impl"><option value="">Any</option></select></div>
+    <div class="field"><label for="f-status">Customer status</label><select id="f-status"><option value="">Any</option></select></div>
+    <div class="field"><label for="f-q">Account name</label><input type="search" id="f-q" placeholder="Search…" autocomplete="off"></div>
+    <button class="linklike" id="f-clear" hidden>Reset filters</button>
+  </div>
+</section>
+
+<section class="step" id="summary-card">
+  <div class="step-head">
+    <span class="step-num">2</span>
+    <div class="step-titles"><h2>Check what's missing</h2>
+      <div class="hint">How complete each field is across these accounts. Click <b>Missing</b> to list accounts without it, or <b>Yes</b> to find, say, referenceable accounts.</div></div>
+  </div>
+  <div class="chips" id="chips" style="margin:0 0 12px"></div>
+  <div class="table-wrap" style="max-height:none">
+    <table class="data breakdown">
+      <thead><tr><th>Field</th><th style="width:240px">Filled in</th><th class="num">Missing</th><th class="num">Yes</th><th>Editable here</th></tr></thead>
+      <tbody id="summary-body"></tbody>
+    </table>
+  </div>
+</section>
+
+<section class="step" id="table-card">
+  <div class="step-head">
+    <span class="step-num">3</span>
+    <div class="step-titles"><h2>Review{% if can_edit %} and edit{% endif %} <span class="count" id="acct-count">0</span></h2>
+      <div class="hint">{% if can_edit %}Cells marked ✎ save straight to Salesforce when you change them. Salesforce shows the change as the app's login; your name goes in the change log in step 4.{% else %}Read-only for you. To edit reference fields, ask an admin to add your email to <code>SFDC_EDITORS</code>.{% endif %} Blank fields show as <span class="missing">missing</span>.</div></div>
+  </div>
+  <div class="table-wrap" id="acct-wrap">
+    <table class="data accounts-table" id="acct-table">
+      <thead><tr id="acct-head"></tr></thead>
+      <tbody id="acct-body"></tbody>
+    </table>
+  </div>
+</section>
+
+<section class="step" id="step-use">
+  <div class="step-head">
+    <span class="step-num">4</span>
+    <div class="step-titles"><h2>Use this list</h2>
+      <div class="hint">Downloads follow everything you chose above.</div></div>
+  </div>
+  <div class="uses">
+    <div class="use">
+      <h3>Accounts</h3>
+      <p>One row per account with every field above and how many are missing.</p>
+      <p class="where">For a CSM clean-up push, or finding reference customers for sales.</p>
+      <button class="btn primary" id="export-accounts" type="button">↓ Download accounts CSV</button>
+    </div>
+    <div class="use">
+      <h3>Change log</h3>
+      <p>Every edit made from this page: who, which field, old and new value, and whether Salesforce accepted it.</p>
+      <p class="where">Salesforce's own history shows these as the app's login.</p>
+      <button class="btn" id="show-log" type="button">Show recent edits</button>
+    </div>
+  </div>
+  <div id="log-wrap" hidden>
+    <h3 class="step-sub">Recent edits</h3>
+    <div class="table-wrap" style="max-height:360px">
+      <table class="data"><thead><tr><th>When (UTC)</th><th>Who</th><th>Account</th><th>Field</th><th>Change</th><th>Result</th></tr></thead>
+        <tbody id="log-body"></tbody></table>
+    </div>
+  </div>
+</section>
+
+</div>
+
+<form id="export-form" method="post" hidden><input type="hidden" name="spec" id="export-spec"></form>
+<script id="fields-data" type="application/json">{{ fields|tojson }}</script>
+<script>window.LIGHTNING_BASE = {{ lightning_base|tojson }}; window.CAN_EDIT = {{ can_edit|tojson }};</script>
+{% endblock %}
+
+{% block scripts %}<script src="/static/accounts.js?v=1"></script>{% endblock %}

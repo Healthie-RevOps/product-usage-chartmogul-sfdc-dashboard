@@ -492,8 +492,8 @@ check("top bar says when the data is from; Tour tab and scripts present",
       ("Data as of" in page, 'id="tour-tab"' in page, "/static/tour.js" in page, 'class="step-num"' in page,
        'id="empty-state"' in page), (True, True, True, True, True))
 r = client.get("/")
-check("home: four task cards with live numbers", (r.status_code, r.text.count('class="task"'),
-      "paying Enterprise accounts" in r.text, "win rate" in r.text), (200, 4, True, True))
+check("home: five task cards with live numbers", (r.status_code, r.text.count('class="task"'),
+      "paying Enterprise accounts" in r.text, "win rate" in r.text, "Referenceable" in r.text), (200, 5, True, True, True))
 r = client.get("/?product=Group+Plan&view=former", follow_redirects=False)
 check("old explorer links on / redirect to /explorer", (r.status_code, r.headers["location"]),
       (302, "/explorer?product=Group+Plan&view=former"))
@@ -514,6 +514,90 @@ with session_scope() as s:
 st = data_mod.sync_status(SessionLocal_ := main.SessionLocal())
 SessionLocal_.close()
 check("a 'running' row older than 3h isn't shown as running", st["running_since"], None)
+
+print("\nenterprise accounts + Salesforce edits:")
+from app.db import AccountEdit  # noqa: E402,F401
+from sync import sfdc as sfdc_live  # noqa: E402
+with session_scope() as s:
+    a_ = s.get(SfdcAccount, ENT_ACCT)
+    a_.referenceable, a_.contracted_case_study, a_.renewal_date = "Yes", "No", date(2027, 3, 1)
+    s.add(SyncRun(finished_at=datetime.now(), status="success"))
+r = client.get("/accounts")
+check("accounts page renders, read-only without SFDC_EDITORS",
+      (r.status_code, "Enterprise accounts" in r.text, "Read-only for you" in r.text), (200, True, True))
+ac = client.get("/api/accounts").json()
+row = ac["rows"][0]
+check("account values + missing count", (row["name"], row["values"]["referenceable"], row["values"]["renewal_date"],
+                                         row["values"]["case_study_complete"], row["missing"] > 0),
+      ("Ent Co", "Yes", "2027-03-01", None, True))
+summ = {x["key"]: x for x in ac["summary"]}
+check("completeness summary", (summ["referenceable"]["filled"], summ["referenceable"]["yes"],
+                               summ["case_study_complete"]["missing"]), (1, 1, 1))
+check("field filter: missing / yes",
+      ([x["name"] for x in client.get("/api/accounts?paying=false&field=referenceable&is=missing").json()["rows"]],
+       [x["name"] for x in client.get("/api/accounts?paying=false&field=referenceable&is=yes").json()["rows"]]),
+      (["Prospect Ent"], ["Ent Co"]))
+rows = csv_rows(client.post("/export/accounts.csv", data=spec(paying=False, field="referenceable", is_="yes")))
+check("accounts CSV follows filters", [(x["account"], x["referenceable"]) for x in rows], [("Ent Co", "Yes")])
+
+EDIT = {"X-Requested-With": "fetch"}
+url_ = f"/api/accounts/{ENT_ACCT}/fields"
+r = client.post(url_, json={"field": "case_study_complete", "value": "Yes", "expected": None}, headers=EDIT)
+check("edit refused without SFDC_EDITORS", r.status_code, 403)
+os.environ["SFDC_EDITORS"] = "someone@gethealthie.com, dev@gethealthie.com"
+check("allowlisted user sees edit hint", "save straight to Salesforce" in client.get("/accounts").text, True)
+writes, sf_now = [], {"Case_Study_Complete__c": None, "Reference_Date__c": None}
+saved_sf = (sfdc_live.get_account, sfdc_live.update_account)
+sfdc_live.get_account = lambda aid, names: {n: sf_now.get(n) for n in names}
+
+
+def fake_update(aid, values):
+    writes.append((aid, values))
+    sf_now.update(values)
+
+
+def failing_update(aid, values):
+    raise sfdc_live.SfdcError("400: FIELD_CUSTOM_VALIDATION_EXCEPTION")
+
+
+sfdc_live.update_account = fake_update
+try:
+    r = client.post(url_, json={"field": "case_study_complete", "value": "Yes", "expected": None}, headers=EDIT)
+    check("edit saves to Salesforce and locally", (r.status_code, r.json(), writes,
+          client.get("/api/accounts").json()["rows"][0]["values"]["case_study_complete"]),
+          (200, {"status": "saved", "value": "Yes"}, [(ENT_ACCT, {"Case_Study_Complete__c": "Yes"})], "Yes"))
+    sf_now["Case_Study_Complete__c"] = "No"   # someone changed it in Salesforce meanwhile
+    writes.clear()
+    r = client.post(url_, json={"field": "case_study_complete", "value": "", "expected": "Yes"}, headers=EDIT)
+    check("conflict: changed in Salesforce since sync -> nothing written, current value shown",
+          (r.json(), writes), ({"status": "conflict", "value": "No"}, []))
+    r = client.post(url_, json={"field": "reference_date", "value": "2026-13-40", "expected": None}, headers=EDIT)
+    check("bad date rejected", r.status_code, 400)
+    r = client.post(url_, json={"field": "case_study_available", "value": "Yes"}, headers=EDIT)
+    check("read-only field rejected", r.status_code, 400)
+    r = client.post(url_, json={"field": "website", "value": "x"}, headers=EDIT)
+    check("field outside the allowlist rejected", r.status_code, 400)
+    r = client.post(url_, json={"field": "case_study_complete", "value": "Yes", "expected": "No"})
+    check("missing X-Requested-With rejected (CSRF guard)", r.status_code, 400)
+    r = client.post(f"/api/accounts/{PROSPECT}x/fields", json={"field": "referenceable", "value": "Yes"}, headers=EDIT)
+    check("unknown account rejected", r.status_code, 400)
+    sfdc_live.update_account = failing_update
+    r = client.post(url_, json={"field": "reference_date", "value": "2026-11-01", "expected": None}, headers=EDIT)
+    check("Salesforce error -> 502 with its message", (r.status_code, "VALIDATION" in r.json()["detail"]), (502, True))
+finally:
+    sfdc_live.get_account, sfdc_live.update_account = saved_sf
+    os.environ.pop("SFDC_EDITORS")
+log = client.get("/api/accounts/edits").json()["edits"]
+check("change log records who, what, result (incl. conflicts and errors)",
+      [(e["user"], e["field"], e["old"], e["new"], e["status"]) for e in log[:3]],
+      [("dev@gethealthie.com", "Reference date", None, "2026-11-01", "error"),
+       ("dev@gethealthie.com", "Case study complete", "No", None, "conflict"),
+       ("dev@gethealthie.com", "Case study complete", None, "Yes", "saved")])
+try:
+    sfdc_live.update_account(ENT_ACCT, {"Name": "Hacked"})
+    check("update_account rejects non-allowlisted API fields", "wrote", "refused")
+except sfdc_live.SfdcError as exc:
+    check("update_account rejects non-allowlisted API fields", "Not an editable field" in str(exc), True)
 
 print("\nfails closed (no SESSION_SECRET, no insecure override):")
 os.environ.pop("ALLOW_INSECURE_NO_AUTH")

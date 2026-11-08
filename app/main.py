@@ -18,7 +18,8 @@ from sqlalchemy import desc
 from sqlalchemy.orm import selectinload
 from starlette.middleware.sessions import SessionMiddleware
 
-from app import auth, data, deals, enterprise, quality
+from app import accounts, auth, data, deals, enterprise, quality
+from sync import sfdc as sfdc_client
 from app.db import (
     Customer, HealthieOrgUsage, SfdcAccount, SfdcContract, SyncRun, init_db, SessionLocal,
 )
@@ -168,7 +169,10 @@ def _home_stats(session) -> dict:
     """One live number per task card on the home page. Each is None until its data exists."""
     snap = data.snapshot(session)
     out = {"products": len(snap.products) or None, "enterprise": None, "win_rate": None,
-           "fixes": None, "never_pitched": None}
+           "fixes": None, "never_pitched": None, "ref_missing": None}
+    _, acct_rows = accounts.rows(session, snap, paying=True)
+    if acct_rows:
+        out["ref_missing"] = sum(1 for r in acct_rows if r["values"]["referenceable"] is None)
     ent = enterprise.filter_rows(enterprise.base_rows(session, snap), paying=True)
     if ent:
         out["enterprise"] = len(ent)
@@ -213,6 +217,19 @@ def enterprise_page(request: Request):
     try:
         return _page(request, "enterprise.html", {
             "addons": [{"key": a["key"], "label": a["label"]} for a in enterprise.ADDONS],
+        }, session)
+    finally:
+        session.close()
+
+
+@app.get("/accounts", response_class=HTMLResponse)
+def accounts_page(request: Request):
+    session = SessionLocal()
+    try:
+        return _page(request, "accounts.html", {
+            "fields": [{k: f[k] for k in ("key", "label", "kind", "group", "editable")}
+                       for f in accounts.FIELDS],
+            "can_edit": accounts.can_edit(auth.current_user(request)),
         }, session)
     finally:
         session.close()
@@ -566,6 +583,100 @@ def export_enterprise_contacts(spec: str = Form("{}")):
              + [x["account"]["addons"][a["key"]]["state"] for a in addons]
              + [x["contact"].id, x["contact"].account_id] for x in items),
             f"enterprise_contacts_{date.today().isoformat()}.csv")
+    finally:
+        session.close()
+
+
+# ---------------------------------------------------------------- enterprise accounts
+
+class AcctSpec(BaseModel):
+    paying: bool = True
+    status: str = ""
+    csm: str = ""
+    segment: str = ""
+    impl: str = ""
+    q: str = ""
+    field: str = ""
+    is_: str = ""
+    account_ids: list[str] | None = None
+
+
+def _acct_rows(session, s: AcctSpec):
+    return accounts.rows(session, data.snapshot(session), s.paying, s.status, s.csm, s.segment,
+                         s.impl, s.q, s.field, s.is_, s.account_ids)
+
+
+@app.get("/api/accounts")
+def api_accounts(request: Request, paying: bool = True, status: str = "", csm: str = "",
+                 segment: str = "", impl: str = "", q: str = "", field: str = "", is_: str = Query("", alias="is")):
+    session = SessionLocal()
+    try:
+        base, rows = _acct_rows(session, AcctSpec(paying=paying, status=status, csm=csm,
+                                                  segment=segment, impl=impl, q=q, field=field, is_=is_))
+        return JSONResponse({"has_data": bool(base), "sync": data.sync_status(session),
+                             "rows": rows, "summary": accounts.summary(rows),
+                             "facets": enterprise.facets(base),
+                             "can_edit": accounts.can_edit(auth.current_user(request))})
+    finally:
+        session.close()
+
+
+class FieldEdit(BaseModel):
+    field: str
+    value: str | None = None
+    expected: str | None = None      # the value the person saw; guards against overwrites
+
+
+@app.post("/api/accounts/{account_id}/fields")
+def api_edit_account(account_id: str, body: FieldEdit, request: Request):
+    """Write one allowlisted field to Salesforce. JSON + X-Requested-With only, so a
+    cross-site form can't trigger it (the session cookie is also SameSite=Lax)."""
+    if request.headers.get("x-requested-with") != "fetch" or             not request.headers.get("content-type", "").startswith("application/json"):
+        raise HTTPException(400, "Bad request")
+    user = auth.current_user(request)
+    if not accounts.can_edit(user):
+        raise HTTPException(403, "You don't have edit access. Ask an admin to add you to SFDC_EDITORS.")
+    session = SessionLocal()
+    try:
+        try:
+            result = accounts.edit(session, user, account_id, body.field, body.value, body.expected)
+            session.commit()
+            return JSONResponse(result)
+        except accounts.EditError as exc:
+            session.rollback()
+            raise HTTPException(400, str(exc))
+        except sfdc_client.SfdcError as exc:
+            session.commit()            # keep the failed attempt in the change log
+            raise HTTPException(502, f"Salesforce didn't accept the change: {str(exc)[:300]}")
+    finally:
+        session.close()
+
+
+@app.get("/api/accounts/edits")
+def api_account_edits():
+    session = SessionLocal()
+    try:
+        return JSONResponse({"edits": accounts.recent_edits(session)})
+    finally:
+        session.close()
+
+
+@app.post("/export/accounts.csv")
+def export_accounts(spec: str = Form("{}")):
+    try:
+        s = AcctSpec.model_validate_json(spec or "{}")
+    except ValueError as exc:
+        raise HTTPException(400, f"Bad selection: {exc}")
+    session = SessionLocal()
+    try:
+        _, rows = _acct_rows(session, s)
+        return _csv_response(
+            ["account", "customer_status", "sfdc_mrr_usd"] + [f["key"] for f in accounts.FIELDS]
+            + ["fields_missing", "sfdc_account_id", "sfdc_url"],
+            ([r["name"], r["customer_status"], r["mrr"]] + [r["values"][f["key"]] for f in accounts.FIELDS]
+             + [r["missing"], r["id"], f"{LIGHTNING_BASE}/lightning/r/Account/{r['id']}/view"]
+             for r in rows),
+            f"enterprise_accounts_{date.today().isoformat()}.csv")
     finally:
         session.close()
 

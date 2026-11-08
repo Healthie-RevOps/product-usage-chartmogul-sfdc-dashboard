@@ -92,6 +92,10 @@
     load();
   }
   function renderChips() {
+    document.querySelectorAll('select.th-filter').forEach(sel => {
+      sel.value = state.addons[sel.dataset.addon] || '';
+      sel.classList.toggle('active', !!sel.value);
+    });
     const el = $('addon-chips');
     el.textContent = '';
     Object.entries(state.addons).forEach(([k, v]) => {
@@ -178,7 +182,26 @@
     [['name', 'Account', ''], ['mrr', 'MRR', 'num'], ['renewal', 'Renewal', ''], ['providers', 'Providers', 'num']].forEach(([k, label, cls]) => {
       const th = h('th', 'sortable ' + cls, label); th.dataset.sort = k; tr.appendChild(th);
     });
-    ADDONS.forEach(a => { const th = h('th', 'sortable addon', a.label); th.dataset.sort = 'a:' + a.key; tr.appendChild(th); });
+    ADDONS.forEach(a => {
+      const th = h('th', 'sortable addon');
+      th.dataset.sort = 'a:' + a.key;
+      th.appendChild(h('span', 'th-label', a.label));
+      th.title = `Click to sort by ${a.label} status (has it → in pipeline → lost → not pitched)`;
+      // per-add-on status filter, right in the column header
+      const sel = h('select', 'th-filter');
+      sel.dataset.addon = a.key;
+      sel.setAttribute('aria-label', `Filter by ${a.label} status`);
+      [['', 'Any status'], ['has', 'Has it'], ['pipeline', 'In pipeline'], ['lost', 'Lost'], ['none', 'Not pitched'], ['not_has', "Doesn't have it"]]
+        .forEach(([v, t]) => { const o = h('option', null, t); o.value = v; sel.appendChild(o); });
+      sel.addEventListener('click', e => e.stopPropagation());
+      sel.addEventListener('change', e => {
+        e.stopPropagation();
+        if (sel.value) state.addons[a.key] = sel.value; else delete state.addons[a.key];
+        load();
+      });
+      th.appendChild(sel);
+      tr.appendChild(th);
+    });
     tr.querySelectorAll('th.sortable').forEach(th => th.addEventListener('click', () => {
       const k = th.dataset.sort;
       state.sort = { key: k, dir: state.sort.key === k ? -state.sort.dir : (k === 'name' || k === 'renewal' || k.startsWith('a:') ? 1 : -1) };

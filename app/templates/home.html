@@ -16,6 +16,13 @@
     <span class="stat">{% if stats.enterprise %}<b>{{ stats.enterprise|num }}</b>paying Enterprise accounts · {{ stats.never_pitched|num }} add-ons never pitched{% else %}<b>—</b>loads after the next sync{% endif %}</span>
     <span class="go">Open Enterprise add-ons →</span>
   </a>
+  <a class="task" href="/accounts">
+    <span class="tagline">Account data</span>
+    <span class="q">Check and fill in Enterprise account data</span>
+    <span class="what">See which accounts are missing a CSM, renewal date, or reference and case-study details, find referenceable customers, and fill in reference fields straight into Salesforce.</span>
+    <span class="stat">{% if stats.ref_missing is not none %}<b>{{ stats.ref_missing|num }}</b>paying accounts with no “Referenceable” answer{% else %}<b>—</b>loads after the next sync{% endif %}</span>
+    <span class="go">Open Accounts →</span>
+  </a>
   <a class="task" href="/deals">
     <span class="tagline">Compete</span>
     <span class="q">Understand why we win and lose</span>
