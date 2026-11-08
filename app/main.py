@@ -1,5 +1,6 @@
 """Dashboard web service. Start command:  uvicorn app.main:app --host 0.0.0.0 --port $PORT"""
 import base64
+import logging
 import binascii
 import csv
 import io
@@ -24,6 +25,8 @@ from sync import sfdc as sfdc_client
 from app.db import (
     Customer, HealthieOrgUsage, SfdcAccount, SfdcContract, SyncRun, init_db, SessionLocal,
 )
+
+log = logging.getLogger("app")
 
 app = FastAPI(title="Healthie ChartMogul x SFDC", docs_url=None, redoc_url=None,
               openapi_url=None)
@@ -171,10 +174,13 @@ def _home_stats(session) -> dict:
     snap = data.snapshot(session)
     out = {"products": len(snap.products) or None, "enterprise": None, "win_rate": None,
            "fixes": None, "never_pitched": None, "ref_missing": None, "retention": None}
-    built = stickiness.build(session, snap)
-    total = next((x for x in built["summary"] if x["plan"] == segments.ALL), None)
-    if total:
-        out["retention"] = total["logo_retention_12m"]
+    try:   # optional on the home page: never let it take the page down
+        built = stickiness.build(session, snap)
+        total = next((x for x in built["summary"] if x["plan"] == segments.ALL), None)
+        if total:
+            out["retention"] = total["logo_retention_12m"]
+    except Exception:
+        log.exception("Retention stats for the home page failed")
     _, acct_rows = accounts.rows(session, snap, paying=True)
     if acct_rows:
         out["ref_missing"] = sum(1 for r in acct_rows if r["values"]["referenceable"] is None)
