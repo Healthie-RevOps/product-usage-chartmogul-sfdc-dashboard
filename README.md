@@ -266,8 +266,7 @@ ALLOW_INSECURE_NO_AUTH=1 uvicorn app.main:app --reload   # skip Google sign-in l
   retention over the last year; at-risk and churned-90-days lists + CSVs. Logic in `app/stickiness.py`.
 - **Plans** (`app/segments.py`): decided by what ChartMogul bills (Group+ Plan or Group + API Access =
   "Group + API"; Plus / Essentials / Small Practice / Core / Starter / Beginnings / Student = "Private
-  practice"). Salesforce `Current_Plan__c` is only a fallback: it's stale for private practice (3,886
-  paying accounts still say "Plus Trial" as of 2026-11-08). Exception: accounts Salesforce calls
+  practice"). Salesforce `Current_Plan__c` is only a fallback: it's stale for private practice (thousands of paying accounts still say "Plus Trial"). Exception: accounts Salesforce calls
   Enterprise stay Enterprise, so the Enterprise views match the SFDC Enterprise report. Add-ons and
   Accounts have a plan selector (Enterprise by default); Enterprise MRR is Salesforce MRR, other plans
   use ChartMogul MRR.
