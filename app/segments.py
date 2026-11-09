@@ -1,6 +1,7 @@
 """Plan segments: which plan a customer (or account) is on, from what ChartMogul bills.
 
-  Enterprise        Enterprise base fee / Enterprise* products, Standard or Support Seats
+  Enterprise        Enterprise base fee / Enterprise* products (not seats: Group bills
+                    Standard Seats too, 705 live Group customers on 2026-11-08)
   Group + API       Group+ Plan, or Group Plan together with API Access
   Group             Group Plan
   Private practice  Plus, Essentials, Small Practice, Core, Starter, Beginnings, Student, Practice Plus
@@ -18,7 +19,7 @@ ENTERPRISE, GROUP_API, GROUP, PRIVATE = "Enterprise", "Group + API", "Group", "P
 PLANS = [ENTERPRISE, GROUP_API, GROUP, PRIVATE]
 ALL = "All plans"
 
-_ENTERPRISE = re.compile(r"^enterprise|^standard seat|^support seat", re.I)
+_ENTERPRISE = re.compile(r"^enterprise", re.I)
 _GROUP_PLUS = re.compile(r"^group\s*\+|^group\+", re.I)
 _GROUP = re.compile(r"^group", re.I)
 _API = re.compile(r"\bapi\b", re.I)

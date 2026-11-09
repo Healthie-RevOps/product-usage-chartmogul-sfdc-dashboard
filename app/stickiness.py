@@ -22,7 +22,8 @@ from statistics import median
 from app import data, segments
 from app.db import Activity
 
-INACTIVE_DAYS = 30          # no provider login in this long = not using it
+MIN_TREND_COHORT = 20      # smaller 12-month cohorts are noise; left off the trend chart
+INACTIVE_DAYS = 30          # no provider login in this long (or ever) = not using it
 
 
 def _d(dt):
@@ -146,7 +147,7 @@ def _build(session, snap) -> dict:
         grr_num = sum(min(c.mrr_now, _mrr_at(c, year_ago)) for c in retained)
         tenures = [(today - c.first_start).days / 30.44 for c in active]
         with_usage = [u for u in (_usage(snap, c.account_id) for c in active) if u]
-        using = [u for u in with_usage if (u.get("hl_active_providers") or 0) > 0]
+        using = [u for u in with_usage if _recent_login(u, today)]
         summary.append({
             "plan": p,
             "active": len(active),
@@ -169,6 +170,7 @@ def _build(session, snap) -> dict:
     # 12-month logo retention measured at each of the last 12 month ends
     points = _month_ends(12, today)
     trend = {p: [] for p in plans}
+    sizes = {p: [] for p in plans}
     for m in points:
         then = m - timedelta(days=365)
         coh: dict[str, list] = defaultdict(list)
@@ -181,23 +183,28 @@ def _build(session, snap) -> dict:
             members = coh.get(p, [])
             kept = sum(1 for c in members if _active(c, m))
             trend[p].append(kept / len(members) if members else None)
+            sizes[p].append(len(members))
 
-    return {"summary": summary, "trend": {"dates": [d.isoformat() for d in points], "series": trend},
+    return {"summary": summary,
+            "trend": {"dates": [d.isoformat() for d in points], "series": trend, "cohorts": sizes,
+                      "min_cohort": MIN_TREND_COHORT},
             "custs": custs, "today": today, "q_ago": q_ago, "per": per}
 
 
+def _recent_login(u: dict, today: date) -> bool:
+    """A provider at the org logged in within INACTIVE_DAYS. ("Active providers" alone
+    isn't usage: it means not deactivated, and nearly every org has one.)"""
+    last = u.get("hl_last_activity")
+    return bool(last) and date.fromisoformat(last) >= today - timedelta(days=INACTIVE_DAYS)
+
+
 def _is_inactive(snap, c: _Cust, today: date) -> bool:
-    """Paying, Healthie usage data available, and no active providers or no provider
-    login in INACTIVE_DAYS."""
+    """Paying, Healthie usage data available, and no provider login in INACTIVE_DAYS
+    (including never)."""
     if c.mrr_now <= 0:
         return False
     u = _usage(snap, c.account_id)
-    if not u:
-        return False
-    if (u.get("hl_active_providers") or 0) == 0:
-        return True
-    last = u.get("hl_last_activity")
-    return bool(last) and date.fromisoformat(last) < today - timedelta(days=INACTIVE_DAYS)
+    return bool(u) and not _recent_login(u, today)
 
 
 # ------------------------------------------------------------------ lists
