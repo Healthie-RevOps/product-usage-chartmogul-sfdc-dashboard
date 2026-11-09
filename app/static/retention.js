@@ -77,7 +77,10 @@
       tr.appendChild(h('td', 'num', fmt.int(s.paying_inactive)));
       body.appendChild(tr);
     });
-    $('compare-note').textContent = 'Click a plan to focus the lists in step 3. Hover “Kept after 12 mo” and “Using it” for the underlying counts. Usage comes from Healthie (Metabase) and is today only.';
+    const out = Object.entries(state.data.outside_billing || {}).filter(([, n]) => n > 0)
+      .map(([p, n]) => `${fmt.int(n)} paying ${p} account${n === 1 ? '' : 's'}`);
+    $('compare-note').textContent = 'Click a plan to focus the lists in step 3. Hover “Kept after 12 mo” and “Using it” for the underlying counts. Usage comes from Healthie (Metabase) and is today only.' +
+      (out.length ? ` Not included: ${out.join(', ')} with no Stripe / ChartMogul billing (e.g. invoiced customers), since retention is measured from billing history.` : '');
   }
   function renderCompareSelection() {
     document.querySelectorAll('#compare-body tr').forEach(tr => tr.classList.toggle('selected', tr.dataset.plan === state.plan && state.plan !== 'All plans'));
@@ -93,7 +96,12 @@
   }
   function renderTrend() {
     const t = state.data.trend;
-    const series = state.data.plans.map((p, i) => ({ name: p, color: SLOTS[i], values: filled(t.series[p]) }));
+    // a plan with too few customers a year ago would chart noise (or a fake flat line)
+    const small = state.data.plans.filter(p => Math.min(...t.cohorts[p]) < t.min_cohort);
+    const series = state.data.plans.map((p, i) => ({ name: p, color: SLOTS[i], values: filled(t.series[p]) }))
+      .filter(s => !small.includes(s.name));
+    $('trend-note').textContent = small.length
+      ? `Not charted: ${small.map(p => { const n = Math.min(...t.cohorts[p]); return `${p} (${n === 0 ? 'no customers' : 'as few as ' + fmt.int(n) + ' customers'} a year earlier at some point)`; }).join(', ')}; too few to show a reliable trend. See the table in step 1.` : '';
     Charts.legend($('trend-legend'), series);
     Charts.line($('trend-chart'), { dates: t.dates, series, endLabels: true, height: 260,
       yFormat: v => Math.round(v * 100) + '%', yAxisFormat: v => Math.round(v * 100) + '%',
@@ -138,7 +146,7 @@
     if (state.list === 'at_risk') {
       scope.append(`${fmt.int(total)} customers on ${plan} are `);
       scope.appendChild(h('b', null, 'paying but not using Healthie'));
-      scope.append(` (no active providers, or no provider login in ${state.data.inactive_days} days).`);
+      scope.append(` (no provider login in the last ${state.data.inactive_days} days, or ever).`);
     } else {
       scope.append(`${fmt.int(total)} customers on ${plan} `);
       scope.appendChild(h('b', null, 'stopped paying in the last 90 days'));

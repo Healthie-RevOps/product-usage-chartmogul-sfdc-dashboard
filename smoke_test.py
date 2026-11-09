@@ -8,7 +8,7 @@ import io
 import json
 import os
 import tempfile
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 os.environ["DATABASE_URL"] = "sqlite:///" + os.path.join(
     tempfile.mkdtemp(), "smoke.db"
@@ -27,6 +27,7 @@ from app.db import (  # noqa: E402
 
 init_db()
 
+ACME_LOGIN = date.today() - timedelta(days=7)   # relative, so usage checks don't age out
 ACME, ORPHAN, GONE, MULTI = "cus_uuid_matched", "cus_uuid_unmatched", "cus_uuid_gone", "cus_uuid_multi"
 
 with session_scope() as s:
@@ -113,7 +114,7 @@ with session_scope() as s:
         s.add(ProductMrr(product="Plus Plan", month=month, mrr_cents=mrr // 4))
     # Healthie product usage (Metabase) for Acme's org 12345, plus an org nobody maps to
     s.add(HealthieOrgUsage(org_id="12345", providers=12, active_providers=9, admins=2,
-                           last_provider_activity=date(2026, 11, 1), clients=500,
+                           last_provider_activity=ACME_LOGIN, clients=500,
                            active_clients=420))
     s.add(HealthieOrgUsage(org_id="99999", providers=1, active_providers=1, admins=1))
     s.add(SyncRun(finished_at=datetime.now(), status="success", customers_synced=4,
@@ -187,7 +188,7 @@ ex = client.get("/api/explore?product=Group+Plan").json()
 acme = next(r for r in ex["rows"] if r["uuid"] == ACME)["account"]
 check("usage joined on Org ID", (acme["org_id"], acme["hl_active_providers"], acme["hl_providers"],
                                  acme["hl_admins"], acme["hl_last_activity"]),
-      ("12345", 9, 12, 2, "2026-11-01"))
+      ("12345", 9, 12, 2, ACME_LOGIN.isoformat()))
 multi = next(r for r in ex["rows"] if r["uuid"] == MULTI)["account"]
 check("account without Org ID has no usage", (multi["org_id"], multi["hl_providers"]), (None, None))
 page = client.get("/customer/" + ACME).text
@@ -196,7 +197,7 @@ check("customer page without Org ID explains why",
       "no Healthie Org ID in Salesforce" in client.get("/customer/" + MULTI).text, True)
 api = client.get("/api/account/001000000000001AAA").json()["account"]
 check("account API includes healthie_product", api["healthie_product"],
-      {"providers": 12, "active_providers": 9, "admins": 2, "last_provider_activity": "2026-11-01",
+      {"providers": 12, "active_providers": 9, "admins": 2, "last_provider_activity": ACME_LOGIN.isoformat(),
        "clients": 500, "active_clients": 420})
 check("customer page shows Clients KPI", "of 500 in Healthie" in page, True)
 check("clients in explorer row", (acme["hl_active_clients"], acme["hl_clients"]), (420, 500))
@@ -205,7 +206,7 @@ check("customers CSV has provider columns",
       (rows["Acme Health"]["healthie_org_id"], rows["Acme Health"]["providers_active"],
        rows["Acme Health"]["providers_total"], rows["Acme Health"]["last_provider_activity"],
        rows["Acme Health"]["clients_active"], rows["Acme Health"]["clients_total"]),
-      ("12345", "9", "12", "2026-11-01", "420", "500"))
+      ("12345", "9", "12", ACME_LOGIN.isoformat(), "420", "500"))
 
 from sync import metabase as mb  # noqa: E402
 good = {k: 1 for k in mb.PROVIDER_COUNTS_COLUMNS}
@@ -607,6 +608,8 @@ check("plan from ChartMogul products",
                                       ["Group Plan", "API Access"], ["Group Plan"], ["Plus Plan", "AI Scribe"],
                                       ["Essentials Plan"], ["Visualize+ Enterprise"], ["AI Scribe"])],
       ["Enterprise", "Group + API", "Group + API", "Group", "Private practice", "Private practice", None, None])
+check("seats aren't an Enterprise signal (Group bills Standard Seats too)",
+      (seg.from_products(["Group Plan", "Standard Seats"]), seg.from_products(["Standard Seats"])), ("Group", None))
 check("plan from Salesforce (fallback): stale 'Plus Trial' is private practice; Group + API flag",
       (seg.from_sfdc("Plus Trial"), seg.from_sfdc("Group", has_api=True), seg.from_sfdc("Canceled Plan")),
       ("Private practice", "Group + API", None))
@@ -627,8 +630,9 @@ check("retention: active Group customers and MRR (Acme 2,500 + Multi 300)",
       (summ["Group"]["active"], summ["Group"]["mrr"]), (2, 280000))
 check("retention: 12-month cohort and logo retention for Group",
       (summ["Group"]["cohort_12m"], summ["Group"]["logo_retention_12m"]), (2, 1.0))  # Acme + Multi Co (from Jan 2025)
-check("retention: usage from Metabase (Acme has 9 active providers)",
-      (summ["Group"]["using_share"], summ["Group"]["median_active_providers"]), (1.0, 9))
+check("retention: 'using' = provider login in 30 days (Acme logged in a week ago; Multi Co has no usage data)",
+      (summ["Group"]["using_share"], summ["Group"]["median_active_providers"], summ["Group"]["usage_coverage"]),
+      (1.0, 9, 0.5))
 check("retention: trend has 13 month points per plan",
       (len(rt["trend"]["dates"]), sorted(rt["trend"]["series"])), (13, sorted(seg.PLANS)))
 c_ = stk._Cust()

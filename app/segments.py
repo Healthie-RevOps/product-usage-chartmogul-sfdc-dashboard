@@ -1,12 +1,13 @@
 """Plan segments: which plan a customer (or account) is on, from what ChartMogul bills.
 
-  Enterprise        Enterprise base fee / Enterprise* products, Standard or Support Seats
+  Enterprise        Enterprise base fee / Enterprise* products (not seats: many Group
+                    customers bill Standard Seats too)
   Group + API       Group+ Plan, or Group Plan together with API Access
   Group             Group Plan
   Private practice  Plus, Essentials, Small Practice, Core, Starter, Beginnings, Student, Practice Plus
 
 ChartMogul (billing) decides. Salesforce's Current_Plan__c is only a fallback for accounts
-with no ChartMogul match: it is stale for private practice (2026-11-08: 3,886 paying accounts
+with no ChartMogul match: it is stale for private practice (thousands of paying accounts
 still labelled "Plus Trial"). Customers billed only for add-ons fall back the same way, else
 they are not in any plan segment.
 """
@@ -18,7 +19,7 @@ ENTERPRISE, GROUP_API, GROUP, PRIVATE = "Enterprise", "Group + API", "Group", "P
 PLANS = [ENTERPRISE, GROUP_API, GROUP, PRIVATE]
 ALL = "All plans"
 
-_ENTERPRISE = re.compile(r"^enterprise|^standard seat|^support seat", re.I)
+_ENTERPRISE = re.compile(r"^enterprise", re.I)
 _GROUP_PLUS = re.compile(r"^group\s*\+|^group\+", re.I)
 _GROUP = re.compile(r"^group", re.I)
 _API = re.compile(r"\bapi\b", re.I)

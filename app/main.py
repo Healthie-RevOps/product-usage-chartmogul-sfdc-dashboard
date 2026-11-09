@@ -731,12 +731,18 @@ def api_retention(plan: str = segments.ALL):
         plan = plan if plan in segments.PLANS else segments.ALL
         risk = stickiness.at_risk(snap, built, plan)
         gone = stickiness.churned(built, plan)
+        # paying accounts with no ChartMogul (Stripe) billing, e.g. invoiced Enterprise
+        # customers: retention is computed from billing history, so they can't be in it
+        outside = {}
+        for r in enterprise.base_rows(session, snap):
+            if (r["mrr"] or 0) > 0 and not r["customer_uuid"]:
+                outside[r["plan"]] = outside.get(r["plan"], 0) + 1
         return JSONResponse({
             "has_data": bool(built["custs"]), "sync": data.sync_status(session),
             "summary": built["summary"], "trend": built["trend"], "plans": segments.PLANS,
             "at_risk": risk[:LIST_LIMIT], "at_risk_total": len(risk),
             "churned": gone[:LIST_LIMIT], "churned_total": len(gone),
-            "inactive_days": stickiness.INACTIVE_DAYS,
+            "inactive_days": stickiness.INACTIVE_DAYS, "outside_billing": outside,
         })
     finally:
         session.close()
